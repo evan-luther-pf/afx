@@ -194,7 +194,17 @@ fn captureRename(
 ) ?change_tracker.FileOperation {
     if (tracker == null) return null;
     const owned_old_path = std.heap.c_allocator.dupe(u8, old_path) catch return null;
-    const owned_new_path = std.heap.c_allocator.dupe(u8, new_path) catch null;
+    const owned_new_path = std.heap.c_allocator.dupe(u8, new_path) catch return .{
+        // Keep a barrier in the undo history when the rename succeeded but the
+        // destination path could not be retained. Without it, /undo would act on
+        // an older operation; treating a missing path as a completed restore would
+        // be equally misleading.
+        .kind = .rename,
+        .path = owned_old_path,
+        .previous_content = null,
+        .timestamp_ms = 0,
+        .preimage_unavailable = true,
+    };
     const preimage = capturePreimage(new_path);
     return .{
         .kind = .rename,

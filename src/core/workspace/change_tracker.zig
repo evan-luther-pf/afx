@@ -17,8 +17,8 @@ pub const FileOperation = struct {
     previous_content: ?[]u8,
     new_path: ?[]u8 = null,
     timestamp_ms: i64,
-    /// Set when the file's state before the mutation could not be read. Such an
-    /// operation is still recorded, so undo consumes it and says so, rather than
+    /// Set when state required to reverse the mutation could not be retained. Such
+    /// an operation is still recorded, so undo consumes it and says so, rather than
     /// silently undoing an older operation the user did not ask about.
     preimage_unavailable: bool = false,
 };
@@ -534,7 +534,7 @@ test "undoLast reports unavailable when renaming back fails" {
     try std.testing.expect(tracker.undoLast(alloc) == .empty);
 }
 
-test "undoLast returns restored for rename operations without new_path" {
+test "undoLast refuses rename operations without the required new_path" {
     const alloc = std.testing.allocator;
     var tracker: ChangeTracker = .{};
     defer tracker.deinit(alloc);
@@ -544,15 +544,16 @@ test "undoLast returns restored for rename operations without new_path" {
         .path = try alloc.dupe(u8, "/workspace/original.txt"),
         .previous_content = try alloc.dupe(u8, "previous"),
         .timestamp_ms = 1,
+        .preimage_unavailable = true,
     });
 
     const result = tracker.undoLast(alloc);
     switch (result) {
-        .restored => |restored_path| {
-            defer alloc.free(restored_path);
-            try std.testing.expectEqualStrings("/workspace/original.txt", restored_path);
+        .unavailable => |reported_path| {
+            defer alloc.free(reported_path);
+            try std.testing.expectEqualStrings("/workspace/original.txt", reported_path);
         },
-        else => return error.ExpectedRestore,
+        else => return error.ExpectedUnavailable,
     }
 }
 
