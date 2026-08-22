@@ -93,8 +93,7 @@ pub const ChangeTracker = struct {
                 if (op.new_path) |new_path| {
                     std.Io.Dir.renameAbsolute(new_path, op.path, io_mod.getIo()) catch {
                         if (op.previous_content) |content| alloc.free(content);
-                        alloc.free(op.path);
-                        return .empty;
+                        return .{ .unavailable = op.path };
                     };
                     // previous_content holds the overwritten destination preimage.
                     if (op.previous_content) |content| {
@@ -121,7 +120,14 @@ pub const ChangeTracker = struct {
                     return .{ .restored = op.path };
                 }
 
-                std.Io.Dir.deleteFileAbsolute(io_mod.getIo(), op.path) catch {};
+                std.Io.Dir.deleteFileAbsolute(io_mod.getIo(), op.path) catch |err| {
+                    // An already-absent file has reached the requested state. Every
+                    // other failure leaves the file's state uncertain and must not
+                    // be reported as a successful deletion.
+                    if (err != error.FileNotFound) {
+                        return .{ .unavailable = op.path };
+                    }
+                };
                 return .{ .deleted = op.path };
             },
         }
@@ -335,6 +341,46 @@ test "undoLast reports deleted for a new write when the file is already absent" 
     try expectMissing(path);
 }
 
+test "undoLast reports unavailable when a new file cannot be deleted" {
+    if (builtin.os.tag != .linux and builtin.os.tag != .macos) return error.SkipZigTest;
+    const alloc = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(io_mod.getIo(), "locked");
+    const path = try tmpPath(alloc, tmp.dir, "locked/new.txt");
+    defer alloc.free(path);
+    try writeAbsolute(path, "new content");
+
+    const dir_path = try tmpPath(alloc, tmp.dir, "locked");
+    defer alloc.free(dir_path);
+    const dir_path_z = try alloc.dupeZ(u8, dir_path);
+    defer alloc.free(dir_path_z);
+    if (std.c.chmod(dir_path_z.ptr, 0o500) != 0) return error.SkipZigTest;
+    defer _ = std.c.chmod(dir_path_z.ptr, 0o700);
+
+    var tracker: ChangeTracker = .{};
+    defer tracker.deinit(alloc);
+    try tracker.pushOperation(alloc, .{
+        .kind = .write,
+        .path = try alloc.dupe(u8, path),
+        .previous_content = null,
+        .timestamp_ms = 1,
+    });
+
+    switch (tracker.undoLast(alloc)) {
+        .unavailable => |reported_path| {
+            defer alloc.free(reported_path);
+            try std.testing.expectEqualStrings(path, reported_path);
+        },
+        else => return error.ExpectedUnavailable,
+    }
+    try std.testing.expectEqual(@as(usize, 0), tracker.stack.items.len);
+
+    const survived = try readAbsolute(alloc, path);
+    defer alloc.free(survived);
+    try std.testing.expectEqualStrings("new content", survived);
+}
+
 test "undoLast restores deleted files when previous content exists" {
     const alloc = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
@@ -458,7 +504,7 @@ test "undoLast restores destination preimage after overwrite rename" {
     try std.testing.expectEqualStrings("dest-preimage", dest);
 }
 
-test "undoLast consumes rename operations when renaming back fails" {
+test "undoLast reports unavailable when renaming back fails" {
     const alloc = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -477,7 +523,13 @@ test "undoLast consumes rename operations when renaming back fails" {
         .timestamp_ms = 1,
     });
 
-    try std.testing.expect(tracker.undoLast(alloc) == .empty);
+    switch (tracker.undoLast(alloc)) {
+        .unavailable => |reported_path| {
+            defer alloc.free(reported_path);
+            try std.testing.expectEqualStrings(old_path, reported_path);
+        },
+        else => return error.ExpectedUnavailable,
+    }
     try std.testing.expectEqual(@as(usize, 0), tracker.stack.items.len);
     try std.testing.expect(tracker.undoLast(alloc) == .empty);
 }
