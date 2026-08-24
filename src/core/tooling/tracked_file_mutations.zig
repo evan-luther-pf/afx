@@ -183,7 +183,7 @@ fn captureDelete(
         .path = owned_path,
         .previous_content = preimage.content,
         .timestamp_ms = 0,
-        .preimage_unavailable = preimage.unavailable,
+        .unavailable_cause = preimage.unavailable_cause,
     };
 }
 
@@ -194,7 +194,7 @@ fn captureRename(
 ) ?change_tracker.FileOperation {
     if (tracker == null) return null;
     const owned_old_path = std.heap.c_allocator.dupe(u8, old_path) catch return null;
-    const owned_new_path = std.heap.c_allocator.dupe(u8, new_path) catch return .{
+    const owned_new_path = std.heap.c_allocator.dupe(u8, new_path) catch |err| return .{
         // Keep a barrier in the undo history when the rename succeeded but the
         // destination path could not be retained. Without it, /undo would act on
         // an older operation; treating a missing path as a completed restore would
@@ -203,7 +203,7 @@ fn captureRename(
         .path = owned_old_path,
         .previous_content = null,
         .timestamp_ms = 0,
-        .preimage_unavailable = true,
+        .unavailable_cause = .{ .stage = .new_path_clone, .err = err },
     };
     const preimage = capturePreimage(new_path);
     return .{
@@ -212,7 +212,7 @@ fn captureRename(
         .previous_content = preimage.content,
         .new_path = owned_new_path,
         .timestamp_ms = 0,
-        .preimage_unavailable = preimage.unavailable,
+        .unavailable_cause = preimage.unavailable_cause,
     };
 }
 
@@ -228,13 +228,13 @@ fn captureCopy(
         .path = owned_path,
         .previous_content = preimage.content,
         .timestamp_ms = 0,
-        .preimage_unavailable = preimage.unavailable,
+        .unavailable_cause = preimage.unavailable_cause,
     };
 }
 
 const Preimage = struct {
     content: ?[]u8 = null,
-    unavailable: bool = false,
+    unavailable_cause: ?change_tracker.UnavailableCause = null,
 };
 
 /// Resolves the preimage an undo record needs. A file proven absent records no content
@@ -245,7 +245,7 @@ fn capturePreimage(capture_path: []const u8) Preimage {
     return switch (change_tracker.ChangeTracker.captureFileState(std.heap.c_allocator, capture_path)) {
         .captured => |content| .{ .content = content },
         .absent => .{},
-        .unavailable => .{ .unavailable = true },
+        .unavailable => |cause| .{ .unavailable_cause = cause },
     };
 }
 
@@ -811,7 +811,7 @@ test "copy over a destination that cannot be captured refuses to undo it" {
 
     // The destination predates the copy, so undo must never treat it as a file the copy created.
     try std.testing.expectEqual(@as(usize, 1), tracker.stack.items.len);
-    try std.testing.expect(tracker.stack.items[0].preimage_unavailable);
+    try std.testing.expect(tracker.stack.items[0].unavailable_cause != null);
 
     const undo = tracker.undoLast(std.heap.c_allocator);
     switch (undo) {
