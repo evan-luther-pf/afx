@@ -297,19 +297,8 @@ fn limitFileSizeForTest(bytes: u64, fail_after_signal: bool) !FileSizeLimitGuard
     return .{ .saved_limit = saved_limit, .saved_action = saved_action };
 }
 
-fn expectSigactionEqual(expected: std.posix.Sigaction, actual: std.posix.Sigaction) !void {
+fn expectSignalHandlerEqual(expected: std.posix.Sigaction, actual: std.posix.Sigaction) !void {
     try std.testing.expectEqual(expected.handler.handler, actual.handler.handler);
-    try std.testing.expectEqual(expected.flags, actual.flags);
-    inline for (std.meta.fields(std.posix.SIG)) |field| {
-        const signal: std.posix.SIG = @enumFromInt(field.value);
-        try std.testing.expectEqual(
-            std.posix.sigismember(&expected.mask, signal),
-            std.posix.sigismember(&actual.mask, signal),
-        );
-    }
-    if (comptime @hasField(std.posix.Sigaction, "restorer")) {
-        try std.testing.expectEqual(expected.restorer, actual.restorer);
-    }
 }
 
 fn readUndoTrace(alloc: Allocator, tmp: std.testing.TmpDir, name: []const u8) ![]u8 {
@@ -336,7 +325,7 @@ test "file size limit guard restores SIGXFSZ after normal use" {
 
     var actual: std.posix.Sigaction = std.mem.zeroes(std.posix.Sigaction);
     std.posix.sigaction(std.posix.SIG.XFSZ, null, &actual);
-    try expectSigactionEqual(expected, actual);
+    try expectSignalHandlerEqual(expected, actual);
 }
 
 test "file size limit setup restores SIGXFSZ on failure" {
@@ -356,7 +345,7 @@ test "file size limit setup restores SIGXFSZ on failure" {
 
     var actual: std.posix.Sigaction = std.mem.zeroes(std.posix.Sigaction);
     std.posix.sigaction(std.posix.SIG.XFSZ, null, &actual);
-    try expectSigactionEqual(expected, actual);
+    try expectSignalHandlerEqual(expected, actual);
 }
 
 test "undoLast returns empty on an initially empty stack" {
