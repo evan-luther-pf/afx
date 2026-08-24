@@ -283,7 +283,7 @@ const FileSizeLimitGuard = struct {
 };
 
 fn limitFileSizeForTest(bytes: u64, fail_after_signal: bool) !FileSizeLimitGuard {
-    var saved_action: std.posix.Sigaction = undefined;
+    var saved_action: std.posix.Sigaction = std.mem.zeroes(std.posix.Sigaction);
     std.posix.sigaction(std.posix.SIG.XFSZ, &.{
         .handler = .{ .handler = std.posix.SIG.IGN },
         .mask = std.posix.sigemptyset(),
@@ -321,7 +321,7 @@ fn readUndoTrace(alloc: Allocator, tmp: std.testing.TmpDir, name: []const u8) ![
 test "file size limit guard restores SIGXFSZ after normal use" {
     if (builtin.os.tag != .linux and builtin.os.tag != .macos) return error.SkipZigTest;
 
-    var original: std.posix.Sigaction = undefined;
+    var original: std.posix.Sigaction = std.mem.zeroes(std.posix.Sigaction);
     std.posix.sigaction(std.posix.SIG.XFSZ, &.{
         .handler = .{ .handler = std.posix.SIG.DFL },
         .mask = std.posix.sigemptyset(),
@@ -329,12 +329,12 @@ test "file size limit guard restores SIGXFSZ after normal use" {
     }, &original);
     defer std.posix.sigaction(std.posix.SIG.XFSZ, &original, null);
 
-    var expected: std.posix.Sigaction = undefined;
+    var expected: std.posix.Sigaction = std.mem.zeroes(std.posix.Sigaction);
     std.posix.sigaction(std.posix.SIG.XFSZ, null, &expected);
     const guard = try limitFileSizeForTest(4096, false);
     guard.restore();
 
-    var actual: std.posix.Sigaction = undefined;
+    var actual: std.posix.Sigaction = std.mem.zeroes(std.posix.Sigaction);
     std.posix.sigaction(std.posix.SIG.XFSZ, null, &actual);
     try expectSigactionEqual(expected, actual);
 }
@@ -342,7 +342,7 @@ test "file size limit guard restores SIGXFSZ after normal use" {
 test "file size limit setup restores SIGXFSZ on failure" {
     if (builtin.os.tag != .linux and builtin.os.tag != .macos) return error.SkipZigTest;
 
-    var original: std.posix.Sigaction = undefined;
+    var original: std.posix.Sigaction = std.mem.zeroes(std.posix.Sigaction);
     std.posix.sigaction(std.posix.SIG.XFSZ, &.{
         .handler = .{ .handler = std.posix.SIG.DFL },
         .mask = std.posix.sigemptyset(),
@@ -350,11 +350,11 @@ test "file size limit setup restores SIGXFSZ on failure" {
     }, &original);
     defer std.posix.sigaction(std.posix.SIG.XFSZ, &original, null);
 
-    var expected: std.posix.Sigaction = undefined;
+    var expected: std.posix.Sigaction = std.mem.zeroes(std.posix.Sigaction);
     std.posix.sigaction(std.posix.SIG.XFSZ, null, &expected);
     try std.testing.expectError(error.InjectedSetupFailure, limitFileSizeForTest(4096, true));
 
-    var actual: std.posix.Sigaction = undefined;
+    var actual: std.posix.Sigaction = std.mem.zeroes(std.posix.Sigaction);
     std.posix.sigaction(std.posix.SIG.XFSZ, null, &actual);
     try expectSigactionEqual(expected, actual);
 }
