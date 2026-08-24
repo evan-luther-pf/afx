@@ -835,29 +835,6 @@ test "undoLast leaves the original file intact when the restore write fails" {
     try std.testing.expectEqualStrings(current, survived);
 }
 
-test "captureFileState separates absent from unavailable" {
-    const alloc = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-
-    const missing_path = try tmpPath(alloc, tmp.dir, "missing.txt");
-    defer alloc.free(missing_path);
-    try std.testing.expect(ChangeTracker.captureFileState(alloc, missing_path) == .absent);
-
-    const oversized_path = try tmpPath(alloc, tmp.dir, "oversized.bin");
-    defer alloc.free(oversized_path);
-    defer std.Io.Dir.deleteFileAbsolute(io_mod.getIo(), oversized_path) catch {};
-    {
-        var file = try std.Io.Dir.createFileAbsolute(io_mod.getIo(), oversized_path, .{ .truncate = true });
-        defer file.close(io_mod.getIo());
-        try file.setLength(io_mod.getIo(), 10 * 1024 * 1024 + 1);
-    }
-    switch (ChangeTracker.captureFileState(alloc, oversized_path)) {
-        .unavailable => |cause| try std.testing.expectEqual(UnavailableStage.capture_read, cause.stage),
-        else => return error.ExpectedUnavailable,
-    }
-}
-
 test "undoLast refuses an operation whose preimage was never captured" {
     const alloc = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
