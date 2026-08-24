@@ -300,7 +300,13 @@ fn limitFileSizeForTest(bytes: u64, fail_after_signal: bool) !FileSizeLimitGuard
 fn expectSigactionEqual(expected: std.posix.Sigaction, actual: std.posix.Sigaction) !void {
     try std.testing.expectEqual(expected.handler.handler, actual.handler.handler);
     try std.testing.expectEqual(expected.flags, actual.flags);
-    try std.testing.expectEqualSlices(u8, std.mem.asBytes(&expected.mask), std.mem.asBytes(&actual.mask));
+    inline for (std.meta.fields(std.posix.SIG)) |field| {
+        const signal: std.posix.SIG = @enumFromInt(field.value);
+        try std.testing.expectEqual(
+            std.posix.sigismember(&expected.mask, signal),
+            std.posix.sigismember(&actual.mask, signal),
+        );
+    }
     if (comptime @hasField(std.posix.Sigaction, "restorer")) {
         try std.testing.expectEqual(expected.restorer, actual.restorer);
     }
