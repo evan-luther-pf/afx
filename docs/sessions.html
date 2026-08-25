@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta charset="utf-8">
+<title>Sessions, plans, and task agents - afx</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<p><a href="index.html">afx</a> &gt; Sessions, plans, and task agents</p>
+
+<h1>Sessions, plans, and task agents</h1>
+
+<h2>Sessions</h2>
+
+<p>Interactive work is saved automatically unless an unsaved run is requested.
+List or resume saved work with:</p>
+
+<pre><code>afx sessions
+afx session resume last
+afx session resume --id &lt;id&gt;</code></pre>
+
+<p>Each session records its workspace, messages, tool activity, branches, todos,
+checkpoints, and child-agent relationships. Session state lives under
+<code>~/.afx/sessions/</code>.</p>
+
+<h2>Plans and checkpoints</h2>
+
+<p><code>/plan</code> limits the turn to inspection and planning, then presents the
+result for review before implementation. A checkpoint marks the start of an
+investigation. Rewind replaces exploratory conversation after that point with
+one concise findings report without changing files or processes.</p>
+
+<h2>Todos</h2>
+
+<p>The <code>todo</code> tool keeps a phased task list in the saved session. Work can
+be pending, active, completed, blocked, dropped, or appended. An unfinished list
+remains visible until every task is closed.</p>
+
+<h2>Task agents</h2>
+
+<p>The <code>task</code> tool dispatches substantial independent work to focused
+roles. The parent owns decomposition, shared contracts, integration, and final
+verification. Child agents can coordinate through <code>hub</code> when their work
+shares an orchestration tree.</p>
+
+<p>Built-in roles cover investigation, design, review, security, library research,
+mechanical work, and general implementation. Project roles live in
+<code>.afx/agents/</code>; personal roles live in <code>~/.afx/agents/</code>.</p>
+
+<p>Use the standalone word <code>orchestrate</code> in a prompt when you explicitly
+want substantial independent slices dispatched together.</p>
+
+<hr>
+<p><a href="index.html">Index</a></p>
+
+</body>
+</html>

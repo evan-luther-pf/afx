@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta charset="utf-8">
+<title>Permissions - afx</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<p><a href="index.html">afx</a> &gt; Permissions</p>
+
+<h1>Permissions</h1>
+
+<p>afx separates ordinary development work from actions that need review.
+Permission checks happen when a tool executes, using the exact resolved action.</p>
+
+<h2>Modes</h2>
+
+<dl>
+<dt><code>auto</code></dt>
+<dd>The default. Routine work proceeds. Unresolved sensitive actions receive one
+bounded automatic review.</dd>
+
+<dt><code>ask</code></dt>
+<dd>Sensitive actions pause for human approval in the interactive interface.</dd>
+
+<dt><code>yolo</code></dt>
+<dd>afx permission prompts are disabled. Use this only inside an environment you
+already trust.</dd>
+</dl>
+
+<h2>Rules</h2>
+
+<p>Configured denies are checked before allows. Narrow rules can match exact
+commands, paths, or tool actions. An approval request shown by auto mode is bound
+to one action; ordinary conversation does not approve it.</p>
+
+<p>User settings live in <code>~/.afx/settings.json</code>. Safe project defaults
+can live in <code>.afx.json</code>. Private credentials and permission grants do
+not belong in project configuration.</p>
+
+<h2>Headless requests</h2>
+
+<p><code>afx ask</code> remains noninteractive by default. Add
+<code>--prompt-permissions</code> only when standard input is a terminal and a
+human can answer. JSON output stays on standard output; approval text uses
+standard error.</p>
+
+<hr>
+<p><a href="index.html">Index</a></p>
+
+</body>
+</html>

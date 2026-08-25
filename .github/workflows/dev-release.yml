@@ -1,0 +1,100 @@
+name: Dev Release
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dev-release
+  cancel-in-progress: true
+
+jobs:
+  build:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    name: Build ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            target: x86_64-linux
+          - name: linux-aarch64
+            target: aarch64-linux
+          - name: macos-x86_64
+            target: x86_64-macos
+          - name: macos-aarch64
+            target: aarch64-macos
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Setup Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: "0.16.0"
+
+      - name: Build dev binary
+        run: zig build -Doptimize=ReleaseSafe -Dtarget=${{ matrix.target }} -Dupdate-channel=dev
+
+      - name: Package
+        run: |
+          package_dir="$RUNNER_TEMP/afx-package-${{ matrix.name }}"
+          mkdir -p "$package_dir"
+          cp zig-out/bin/afx LICENSE THIRD_PARTY_NOTICES.md "$package_dir/"
+          tar -czf afx-${{ matrix.name }}.tar.gz -C "$package_dir" afx LICENSE THIRD_PARTY_NOTICES.md
+          sha256sum afx-${{ matrix.name }}.tar.gz > afx-${{ matrix.name }}.tar.gz.sha256
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: afx-${{ matrix.name }}
+          path: |
+            afx-${{ matrix.name }}.tar.gz
+            afx-${{ matrix.name }}.tar.gz.sha256
+
+  publish:
+    needs: [build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      - name: Write dev manifest
+        run: |
+          VERSION=$(grep 'pub const version' src/main.zig | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          jq -n --arg version "$VERSION" --arg commit "$RELEASE_SHA" \
+            '{version: $version, commit: $commit}' > dev.json
+
+      - name: Publish GitHub dev release
+        run: |
+          set -euo pipefail
+          gh release delete dev --cleanup-tag --yes || true
+          git push origin :refs/tags/dev || true
+          gh release create dev \
+            --target "$RELEASE_SHA" \
+            --prerelease \
+            --title "AFX development build" \
+            --notes "Automated build from the latest successful main branch." \
+            afx-*.tar.gz afx-*.tar.gz.sha256 \
+            dev.json

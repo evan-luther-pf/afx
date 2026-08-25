@@ -1,0 +1,65 @@
+# afx
+
+afx is a fast, local coding agent for the terminal, written in Zig.
+
+Canonical links:
+- Repository: https://github.com/evan-luther-pf/afx
+- Documentation: https://evan-luther-pf.github.io/afx/
+- Releases: https://github.com/evan-luther-pf/afx/releases
+- Changelog: https://github.com/evan-luther-pf/afx/blob/main/CHANGELOG.md
+- Issues: https://github.com/evan-luther-pf/afx/issues
+
+Install:
+1. Download the archive for the current platform from the latest GitHub release.
+2. Extract the archive.
+3. Put the afx binary on PATH, for example at ~/.local/bin/afx.
+
+Build from source:
+git clone https://github.com/evan-luther-pf/afx.git
+cd afx
+zig build -Doptimize=ReleaseSafe
+./zig-out/bin/afx
+
+Common commands:
+- afx: start an interactive session in the current directory
+- afx ask "prompt": run one request
+- afx providers: manage providers and credentials
+- afx sessions: list saved sessions
+- afx session resume last: resume the latest workspace session
+- afx status --json: print machine-readable runtime and provider status
+- afx upgrade: install the latest stable GitHub release
+- afx upgrade --channel dev: follow the moving development prerelease
+
+Interactive commands:
+- /help: list commands and shortcuts
+- /model: choose a model
+- /providers: manage accounts and keys
+- /sessions: resume saved work
+- /settings: change preferences
+- /plan: inspect and prepare a reviewable plan before implementation
+
+Configuration:
+- Private settings and runtime state: ~/.afx/
+- Project defaults: .afx.json
+- Personal skills: ~/.afx/skills/
+- Project skills: .afx/skills/
+- Personal agent profiles: ~/.afx/agents/
+- Project agent profiles: .afx/agents/
+- MCP configuration: ~/.afx/mcp.json
+
+Capabilities:
+- Local file inspection and mutation
+- Captured commands and persistent terminal sessions
+- LSP definitions, references, diagnostics, symbols, code actions, and renames
+- DAP debugger sessions
+- Public web search and page reading with citations
+- MCP tools, resources, prompts, and completion
+- Skills, images, memory, todos, checkpoints, and task agents
+- Saved and branching sessions
+
+Permissions:
+- auto: routine work proceeds; unresolved sensitive actions receive bounded review
+- ask: sensitive actions request user approval
+- yolo: no afx permission prompts; use only in a trusted environment
+
+Updates are served only from evan-luther-pf/afx GitHub Releases. Stable builds use versioned releases. Development builds use the moving dev prerelease.

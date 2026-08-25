@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta charset="utf-8">
+<title>Configuration - afx</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<p><a href="index.html">afx</a> &gt; Configuration</p>
+
+<h1>Configuration</h1>
+
+<p>afx keeps private user state separate from project defaults.</p>
+
+<table>
+<thead><tr><th>Path</th><th>Purpose</th></tr></thead>
+<tbody>
+<tr><td><code>~/.afx/settings.json</code></td><td>User and workspace preferences</td></tr>
+<tr><td><code>.afx.json</code></td><td>Safe project defaults committed with a repository</td></tr>
+<tr><td><code>~/.afx/mcp.json</code></td><td>MCP server configuration</td></tr>
+<tr><td><code>~/.afx/skills/</code></td><td>Personal managed skills</td></tr>
+<tr><td><code>.afx/skills/</code></td><td>Project skills</td></tr>
+<tr><td><code>~/.afx/agents/</code></td><td>Personal task-agent profiles</td></tr>
+<tr><td><code>.afx/agents/</code></td><td>Project task-agent profiles</td></tr>
+<tr><td><code>~/.afx/sessions/</code></td><td>Saved sessions and runtime state</td></tr>
+</tbody>
+</table>
+
+<h2>Precedence</h2>
+
+<ol>
+<li>Environment variables</li>
+<li>Workspace overrides in <code>~/.afx/settings.json</code></li>
+<li>Global values in <code>~/.afx/settings.json</code></li>
+<li>Project defaults in <code>.afx.json</code></li>
+<li>Built-in defaults</li>
+</ol>
+
+<p>Project configuration accepts only repository-safe defaults. Provider keys,
+private permissions, runtime state, and personal interface preferences remain in
+the user profile.</p>
+
+<h2>Inspect the active state</h2>
+
+<pre><code>afx status
+afx status --json
+afx doctor --json</code></pre>
+
+<p>Inside the terminal interface, use <code>/settings</code> for display, model,
+permission, and session preferences.</p>
+
+<hr>
+<p><a href="index.html">Index</a></p>
+
+</body>
+</html>

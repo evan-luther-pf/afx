@@ -1,0 +1,46 @@
+{
+  "name": "libfx",
+  "version": "0.0.0",
+  "description": "Embed afx agents and terminals in JavaScript hosts",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/evan-luther-pf/afx.git",
+    "directory": "sdk"
+  },
+  "homepage": "https://github.com/evan-luther-pf/afx/tree/main/sdk#readme",
+  "bugs": "https://github.com/evan-luther-pf/afx/issues",
+  "scripts": {
+    "test:node-wasm": "node tests/test-node-wasm.mjs",
+    "test:node-napi": "node tests/test-node-napi.mjs",
+    "test:browser-wasm": "node tests/test-browser-wasm.mjs"
+  },
+  "exports": {
+    ".": {
+      "node": "./node.js",
+      "browser": "./browser.js",
+      "default": "./browser.js"
+    },
+    "./node": "./node.js",
+    "./browser": "./browser.js",
+    "./wasm": "./afx-sdk.js"
+  },
+  "files": [
+    "browser.js",
+    "node.js",
+    "afx-sdk.js",
+    "afx-core.wasm",
+    "afx-term.wasm",
+    "*.node",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "license": "Apache-2.0"
+}

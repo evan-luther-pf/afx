@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta charset="utf-8">
+<title>Providers and models - afx</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<p><a href="index.html">afx</a> &gt; Providers and models</p>
+
+<h1>Providers and models</h1>
+
+<p>afx supports subscription sign-in, direct API keys, AI Gateway, and
+OpenAI-compatible endpoints. The available model list follows the credentials
+configured on the current machine.</p>
+
+<h2>Manage providers</h2>
+
+<pre><code>afx providers
+afx login codex
+afx login google
+afx logout codex</code></pre>
+
+<p>Inside the terminal interface, use <code>/providers</code> to add, remove, or
+reauthenticate a provider. Use <code>/model</code> to select an available model and
+reasoning effort.</p>
+
+<h2>Credential sources</h2>
+
+<dl>
+<dt>Subscription sign-in</dt>
+<dd>Codex, Google, and supported provider sessions use their native OAuth flows.</dd>
+
+<dt>API keys</dt>
+<dd>Provider-scoped keys can be entered through provider management or supplied
+through documented environment variables.</dd>
+
+<dt>AI Gateway</dt>
+<dd>A Gateway key or eligible Vercel session provides access to the configured
+Gateway catalog.</dd>
+</dl>
+
+<p>afx keeps provider credentials isolated. A key selected for one provider is
+not silently reused for another. Replay-safe authentication or quota failures
+can rotate to another configured source while preserving the failed source for
+diagnostics.</p>
+
+<h2>Web search models</h2>
+
+<p>Native Gemini grounding defaults to <code>gemini-2.5-flash</code>. Native
+Anthropic search defaults to <code>claude-haiku-4-5</code>. Gateway search defaults
+to <code>google/gemini-2.5-flash</code>. Search cards display the provider, model,
+sources, and token usage.</p>
+
+<hr>
+<p><a href="index.html">Index</a></p>
+
+</body>
+</html>

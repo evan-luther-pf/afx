@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta charset="utf-8">
+<title>Updates and troubleshooting - afx</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<p><a href="index.html">afx</a> &gt; Updates and troubleshooting</p>
+
+<h1>Updates and troubleshooting</h1>
+
+<h2>Update</h2>
+
+<p>afx checks <a href="https://github.com/evan-luther-pf/afx/releases">GitHub Releases</a>.
+Stable builds use versioned releases. Development builds use the moving
+<code>dev</code> prerelease.</p>
+
+<pre><code>afx upgrade
+afx upgrade --channel stable
+afx upgrade --channel dev</code></pre>
+
+<p>Automatic checks download a verified archive in the background. When the
+footer reports that an update is installed, press <code>Ctrl+G</code> to reload the
+current executable.</p>
+
+<h2>Common problems</h2>
+
+<dl>
+<dt>afx cannot find a provider.</dt>
+<dd>Run <code>afx providers</code>, then sign in or add a provider API key.</dd>
+
+<dt>A command needs approval.</dt>
+<dd>Review the exact action in the permission screen. Approval applies only to
+that action.</dd>
+
+<dt>The interface looks wrong after an update.</dt>
+<dd>Run <code>afx --version</code>, close old terminal sessions, and launch the
+installed binary again.</dd>
+
+<dt>A saved session will not open.</dt>
+<dd>Check whether the same session is open in another terminal. Run
+<code>afx sessions</code> to inspect available sessions.</dd>
+
+<dt>I found a bug.</dt>
+<dd>Open a <a href="https://github.com/evan-luther-pf/afx/issues/new/choose">GitHub issue</a>.
+Include the afx version, operating system, and smallest reproduction.</dd>
+</dl>
+
+<h2>Remove afx</h2>
+
+<p>Remove the binary from your <code>PATH</code>. Settings, credentials, and saved
+sessions remain under <code>~/.afx/</code>; remove that directory separately only if
+you intend to delete them.</p>
+
+<hr>
+<p><a href="index.html">Index</a></p>
+
+</body>
+</html>

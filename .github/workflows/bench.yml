@@ -1,0 +1,46 @@
+name: Benchmarks
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: bench-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    name: Startup Latency
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: "0.16.0"
+
+      - name: Build (ReleaseSafe)
+        run: zig build -Doptimize=ReleaseSafe
+
+      - name: Install hyperfine
+        run: |
+          wget -q https://github.com/sharkdp/hyperfine/releases/download/v1.19.0/hyperfine_1.19.0_amd64.deb
+          sudo dpkg -i hyperfine_1.19.0_amd64.deb
+
+      - name: Run benchmarks
+        run: ./benchmarks/startup.sh --ci
+
+      - name: Enforce latency budgets
+        run: python3 benchmarks/check_budgets.py
+
+      - name: Run UI activity progress benchmark
+        run: |
+          for run in 1 2 3; do
+            zig build run-bench-ui-activity -Doptimize=ReleaseSafe
+          done

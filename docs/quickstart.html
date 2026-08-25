@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta charset="utf-8">
+<title>Install and quickstart - afx</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<p><a href="index.html">afx</a> &gt; Install and quickstart</p>
+
+<h1>Install and quickstart</h1>
+
+<p>afx publishes native archives for macOS and Linux. Current development
+release: <code>0.0.5</code>.</p>
+
+<h2>Install</h2>
+
+<p>Download the archive for your platform from the
+<a href="https://github.com/evan-luther-pf/afx/releases/latest">latest GitHub release</a>.
+Extract it and place the binary on your <code>PATH</code>:</p>
+
+<pre><code>mkdir -p ~/.local/bin
+mv afx ~/.local/bin/afx
+afx --version</code></pre>
+
+<p>Build from source with Zig 0.16 or newer:</p>
+
+<pre><code>git clone https://github.com/evan-luther-pf/afx.git
+cd afx
+zig build -Doptimize=ReleaseSafe
+./zig-out/bin/afx</code></pre>
+
+<h2>Authenticate</h2>
+
+<p>Sign in with a supported subscription:</p>
+
+<pre><code>afx login codex
+afx login google</code></pre>
+
+<p>Or manage provider API keys:</p>
+
+<pre><code>afx providers</code></pre>
+
+<p>Private credentials and settings live under <code>~/.afx/</code>. The platform
+credential store is used where supported.</p>
+
+<h2>Start afx</h2>
+
+<p>Run afx from the repository the agent may access:</p>
+
+<pre><code>cd path/to/repository
+afx</code></pre>
+
+<p>Open the model selector with <code>/model</code>. Open provider management with
+<code>/providers</code>. Ask for the outcome you want in ordinary language.</p>
+
+<pre><code>Explain this repository.
+Fix the failing login flow and verify it.
+Search the web for the current API, then update this integration.
+Make a plan for this refactor.</code></pre>
+
+<h2>Other modes</h2>
+
+<p><code>afx ask "..."</code> runs one noninteractive request.
+<code>afx acp</code> starts an Agent Client Protocol server over standard input and
+output. <code>afx status --json</code> reports the active configuration.</p>
+
+<hr>
+<p><a href="index.html">Index</a></p>
+
+</body>
+</html>
