@@ -311,7 +311,7 @@ fn providerDisablesTool(provider: model_provider.ProviderId, name: []const u8) b
 
 fn roleAllowsTool(ctx: Context, name: []const u8) bool {
     const allowed = ctx.allowed_tool_names orelse return true;
-    return containsName(allowed, name);
+    return containsName(allowed, name) or containsName(ctx.advertised_dynamic_tool_names, name);
 }
 
 pub fn validateToolCall(ctx: Context, arena: Allocator, call: ToolCall) !tool_contracts.ToolCallValidationResult {

@@ -740,6 +740,7 @@ pub const edit_file = ToolSpec{
             .required = &.{ "path", "old_string", "new_string" },
         },
     },
+    .advertise = false,
     .executor_kind = .edit_file,
     .activity_kind = .edit,
     .requires_approval = true,

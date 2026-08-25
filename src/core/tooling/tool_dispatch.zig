@@ -436,6 +436,7 @@ pub const Tool = struct {
     description: []const u8,
     gateway_schema: gateway_schema.FunctionSchema,
     write_gateway_advertisement_fn: ?WriteGatewayAdvertisementFn = null,
+    advertise: bool = true,
     /// Set when the provider runs the tool instead of afx dispatch. Such a tool
     /// never reaches a call-time permission check, so advertisement is its only
     /// enforcement point and requires an already-settled allow.

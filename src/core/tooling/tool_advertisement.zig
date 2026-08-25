@@ -820,11 +820,13 @@ fn buildToolProjection(alloc: Allocator, tool_set: tool_set_contract.ToolSet, ki
 
     for (tool_set.order) |tool_name| {
         const tool = tool_set.registry.lookup(tool_name) orelse continue;
+        if (!tool.advertise) continue;
         try writeBuiltinTool(alloc, &tools_out.writer, &guidance_out.writer, &first, &first_custom_guidance, tool.*, kind, tool_set, options);
     }
 
     if (kind == .full) {
         for (tool_set.registry.tools) |tool| {
+            if (!tool.advertise) continue;
             if (isCanonicalToolName(tool_set, tool.name)) continue;
             try writeBuiltinTool(alloc, &tools_out.writer, &guidance_out.writer, &first, &first_custom_guidance, tool, kind, tool_set, options);
         }
