@@ -6285,7 +6285,7 @@ describe("acp: model-independent", () => {
           expect(request.body).toContain('"name":"read_file"');
           expect(request.body).toContain('"name":"write_file"');
           expect(request.body).toContain('"name":"subagent"');
-          expect(request.body).not.toContain('"name":"task"');
+          expect(request.body).toContain('"name":"task"');
         }
         expect(client.stderr).toBe("");
       } finally {

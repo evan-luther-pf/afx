@@ -7,7 +7,7 @@ export const CANONICAL_BUILTIN_NAMES = [
   "semantic_search",
   "rule",
   "lsp",
-  "edit_file",
+  "edit",
   "write_file",
   "delete_file",
   "rename_file",

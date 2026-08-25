@@ -1694,6 +1694,7 @@ pub const all = [_]tool_dispatch.Tool{
     read_file,
     write_file,
     edit,
+    edit_file,
     delete_file,
     rename_file,
     copy_file,
@@ -2309,6 +2310,7 @@ test "built-in tools register exact active local order" {
         "read_file",
         "write_file",
         "edit",
+        "edit_file",
         "delete_file",
         "rename_file",
         "copy_file",
@@ -2538,7 +2540,7 @@ test "built-in edit defaults to hashline schema and callbacks" {
     try std.testing.expect(edit.reads_only_fn == hashline_edit_impl.readsOnly);
     try std.testing.expect(edit.irreversible_fn == hashline_edit_impl.isIrreversible);
     try std.testing.expect(registry.lookup("edit") != null);
-    try std.testing.expect(registry.lookup("edit_file") == null);
+    try std.testing.expect(registry.lookup("edit_file") != null);
 }
 
 test "built-in delete_file owns product metadata schema and callbacks" {
