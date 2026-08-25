@@ -1,14 +1,20 @@
 # afx
 
-## 0.0.8
+## 0.0.9
 
 <!-- release:start -->
 
 ### Bug Fixes
 
-- **Intent-safe tool execution:** Strip the reserved live-status intent field before local validation and execution so strict tools such as LSP receive only their declared arguments
+- **Safe workspace undo:** Refuse undo when a file preimage or rename record is incomplete, preserve recorded targets during rollback, and report operations that could not be reversed instead of risking data loss
 
 <!-- release:end -->
+
+## 0.0.8
+
+### Bug Fixes
+
+- **Intent-safe tool execution:** Strip the reserved live-status intent field before local validation and execution so strict tools such as LSP receive only their declared arguments
 
 ## 0.0.7
 

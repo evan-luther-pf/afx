@@ -2324,6 +2324,10 @@ test "LSP resource workspace edits apply and undo in declared order" {
     try std.testing.expectEqual(@as(usize, 4), tracker.stack.items.len);
     for (0..4) |_| switch (tracker.undoLast(alloc)) {
         .restored, .deleted => |path| alloc.free(path),
+        .unavailable => |path| {
+            alloc.free(path);
+            return error.ExpectedUndo;
+        },
         .empty => return error.ExpectedUndo,
     };
     const restored = try readFile(alloc, a_path);
