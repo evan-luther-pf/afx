@@ -153,7 +153,15 @@ const AcpContext = struct {
         errdefer self.alloc.free(owned_id);
         var out: std.Io.Writer.Allocating = .init(self.alloc);
         defer out.deinit();
-        try acp_types.writeToolCall(&out.writer, owned_id, title, kind, .pending);
+        try acp_types.writeToolCall(
+            &out.writer,
+            owned_id,
+            title,
+            kind,
+            .pending,
+            call.name,
+            call.arguments_json,
+        );
         try self.sendUpdate(out.writer.buffered());
         try self.published_tool_calls.put(self.alloc, owned_id, {});
         return owned_id;
@@ -167,6 +175,27 @@ const AcpContext = struct {
         var out: std.Io.Writer.Allocating = .init(self.alloc);
         defer out.deinit();
         try acp_types.writeToolCallUpdate(&out.writer, tool_call_id, .in_progress, plain);
+        try self.sendUpdate(out.writer.buffered());
+    }
+
+    fn sendToolCallDiff(
+        self: *AcpContext,
+        tool_call_id: []const u8,
+        preview: []const u8,
+        additions: u32,
+        deletions: u32,
+    ) !void {
+        const plain = try stripAnsiAlloc(self.alloc, preview);
+        defer if (plain.ptr != preview.ptr) self.alloc.free(plain);
+        var out: std.Io.Writer.Allocating = .init(self.alloc);
+        defer out.deinit();
+        try acp_types.writeToolCallDiffUpdate(
+            &out.writer,
+            tool_call_id,
+            plain,
+            additions,
+            deletions,
+        );
         try self.sendUpdate(out.writer.buffered());
     }
 
@@ -1904,8 +1933,8 @@ fn pushRouteRecoveryStatus(
 fn pushText(raw_ctx: *anyopaque, emission: agent_runtime.TextEmission) !void {
     const ctx: *AcpContext = @ptrCast(@alignCast(raw_ctx));
     const text = switch (emission) {
-        .assistant_source => return,
-        .assistant_rendered => |text| text,
+        .assistant_source => |text| text,
+        .assistant_rendered => return,
         .operational => |text| text,
     };
     if (text.len == 0) return;
@@ -1942,6 +1971,16 @@ fn pushContextNotice(raw_ctx: *anyopaque, text: []const u8) !void {
 
 fn pushDiffBlock(raw_ctx: *anyopaque, payload: agent_runtime.DiffEntryPayload) !void {
     defer diff_mod.freeDiffEntryPayload(std.heap.c_allocator, payload);
+    const ctx: *AcpContext = @ptrCast(@alignCast(raw_ctx));
+    if (payload.full) |full| {
+        try ctx.sendToolCallDiff(
+            full.lifecycle_id.call_id,
+            payload.preview,
+            payload.additions,
+            payload.deletions,
+        );
+        return;
+    }
     try pushText(raw_ctx, .{ .operational = payload.preview });
 }
 
@@ -3083,20 +3122,16 @@ test "ACP tool notifications preserve UTF-8 for clipped and unsafe output" {
     }
 }
 
-test "ACP stream adapter strips ANSI from agent chunks and suppresses writer failure" {
+test "ACP stream adapter preserves Markdown source and suppresses writer failure" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
     const alloc = arena_state.allocator();
     const spans = [_][]const u8{
-        "\x1b[1mbold\x1b[22m and \x1b[3mitalic\x1b[23m\n",
-        "\x1b]8;id=afx-1;https://example.com\x1b\\docs\x1b]8;;\x1b\\\n",
-        "\x1b[2m\xe2\x94\x82 \x1b[22mconst x = **literal**;\n",
-    };
-    const expected_spans = [_][]const u8{
-        "bold and italic\n",
+        "**bold** and *italic*\n",
         "[docs](https://example.com)\n",
-        "\xe2\x94\x82 const x = **literal**;\n",
+        "```swift\nconst x = \"literal\";\n```\n",
     };
+    const expected_spans = spans;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
@@ -3117,8 +3152,8 @@ test "ACP stream adapter strips ANSI from agent chunks and suppresses writer fai
         };
         const deps = agentRuntimeDeps(&ctx);
 
-        for (spans) |span| try deps.push_text(deps.ctx, .{ .assistant_rendered = span });
-        try deps.push_text(deps.ctx, .{ .assistant_rendered = "" });
+        for (spans) |span| try deps.push_text(deps.ctx, .{ .assistant_source = span });
+        try deps.push_text(deps.ctx, .{ .assistant_source = "" });
         try capture.sync(io_mod.getIo());
     }
 
@@ -3167,7 +3202,7 @@ test "ACP stream adapter strips ANSI from agent chunks and suppresses writer fai
     try std.testing.expect(writer_failed);
 
     const failed_deps = agentRuntimeDeps(&failed_ctx);
-    try failed_deps.push_text(failed_deps.ctx, .{ .assistant_rendered = "writer failure remains suppressed" });
+    try failed_deps.push_text(failed_deps.ctx, .{ .assistant_source = "writer failure remains suppressed" });
 }
 
 test "ACP auth failure emits a valid detail-free JSON-RPC notification" {

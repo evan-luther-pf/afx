@@ -138,7 +138,15 @@ pub fn writeUserMessageChunk(w: *std.Io.Writer, text: []const u8) !void {
     try w.writeAll("}}");
 }
 
-pub fn writeToolCall(w: *std.Io.Writer, tool_call_id: []const u8, title: []const u8, kind: ToolCallKind, status: ToolCallStatus) !void {
+pub fn writeToolCall(
+    w: *std.Io.Writer,
+    tool_call_id: []const u8,
+    title: []const u8,
+    kind: ToolCallKind,
+    status: ToolCallStatus,
+    tool_name: []const u8,
+    arguments_json: []const u8,
+) !void {
     try w.writeAll("{\"sessionUpdate\":\"tool_call\",\"toolCallId\":");
     try writeJsonStr(tool_call_id, w);
     try w.writeAll(",\"title\":");
@@ -147,7 +155,11 @@ pub fn writeToolCall(w: *std.Io.Writer, tool_call_id: []const u8, title: []const
     try writeJsonStr(kind.jsonString(), w);
     try w.writeAll(",\"status\":");
     try writeJsonStr(status.jsonString(), w);
-    try w.writeAll("}");
+    try w.writeAll(",\"_meta\":{\"afx\":{\"toolName\":");
+    try writeJsonStr(tool_name, w);
+    try w.writeAll(",\"argumentsJson\":");
+    try writeJsonStr(arguments_json, w);
+    try w.writeAll("}}}");
 }
 
 pub fn writeToolCallUpdate(w: *std.Io.Writer, tool_call_id: []const u8, status: ToolCallStatus, content_text: ?[]const u8) !void {
@@ -175,6 +187,24 @@ pub fn writeToolCallUpdateWithCommandResult(
         try w.writeAll(json);
     }
     try w.writeAll("}");
+}
+
+pub fn writeToolCallDiffUpdate(
+    w: *std.Io.Writer,
+    tool_call_id: []const u8,
+    preview: []const u8,
+    additions: u32,
+    deletions: u32,
+) !void {
+    try w.writeAll("{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":");
+    try writeJsonStr(tool_call_id, w);
+    try w.writeAll(",\"status\":\"in_progress\",\"content\":[{\"type\":\"content\",\"content\":{\"type\":\"text\",\"text\":");
+    try writeJsonStr(preview, w);
+    try w.writeAll("}}],\"_meta\":{\"afx\":{\"contentKind\":\"diff\",\"additions\":");
+    try w.print("{d}", .{additions});
+    try w.writeAll(",\"deletions\":");
+    try w.print("{d}", .{deletions});
+    try w.writeAll("}}}");
 }
 
 pub fn writeInitializeResponse(w: *std.Io.Writer) !void {
@@ -216,9 +246,28 @@ test "writeToolCall produces valid json" {
     const alloc = std.testing.allocator;
     var out: std.Io.Writer.Allocating = .init(alloc);
     defer out.deinit();
-    try writeToolCall(&out.writer, "call_001", "Reading file", .read, .pending);
+    try writeToolCall(&out.writer, "call_001", "Reading file", .read, .pending, "read_file", "{\"path\":\"a.txt\"}");
     try std.testing.expect(std.mem.find(u8, out.writer.buffered(), "\"toolCallId\":\"call_001\"") != null);
     try std.testing.expect(std.mem.find(u8, out.writer.buffered(), "\"kind\":\"read\"") != null);
+    try std.testing.expect(std.mem.find(u8, out.writer.buffered(), "\"toolName\":\"read_file\"") != null);
+    try std.testing.expect(std.mem.find(u8, out.writer.buffered(), "\\\"path\\\":\\\"a.txt\\\"") != null);
+}
+
+test "writeToolCallDiffUpdate preserves structured diff metadata" {
+    const alloc = std.testing.allocator;
+    var out: std.Io.Writer.Allocating = .init(alloc);
+    defer out.deinit();
+    try writeToolCallDiffUpdate(&out.writer, "edit_1", "-old\n+new", 1, 1);
+
+    var parsed = try std.json.parseFromSlice(std.json.Value, alloc, out.writer.buffered(), .{});
+    defer parsed.deinit();
+    const update = parsed.value.object;
+    try std.testing.expectEqualStrings("tool_call_update", update.get("sessionUpdate").?.string);
+    try std.testing.expectEqualStrings(
+        "diff",
+        update.get("_meta").?.object.get("afx").?.object.get("contentKind").?.string,
+    );
+    try std.testing.expectEqual(@as(i64, 1), update.get("_meta").?.object.get("afx").?.object.get("additions").?.integer);
 }
 
 test "writePromptResponse produces valid json" {
