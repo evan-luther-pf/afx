@@ -66,7 +66,7 @@ const VisionAgentToolRuntime = test_support.VisionAgentToolRuntime;
 const fixture_tools_json =
     "[{\"type\":\"function\",\"name\":\"read_file\",\"description\":\"Read a file\",\"inputSchema\":{\"type\":\"object\",\"properties\":{}}}]";
 const terminal_nested_tools_json =
-    "[{\"type\":\"function\",\"name\":\"terminal\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"request\":{\"oneOf\":[{\"type\":\"object\"}]}},\"required\":[\"request\"],\"additionalProperties\":false}}]";
+    "[{\"type\":\"function\",\"name\":\"terminal\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"i\":{\"type\":\"string\"},\"request\":{\"oneOf\":[{\"type\":\"object\"}]}},\"required\":[\"i\",\"request\"],\"additionalProperties\":false}}]";
 
 fn makeOwnedVisionCatalog(
     alloc: std.mem.Allocator,

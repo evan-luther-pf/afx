@@ -19,6 +19,7 @@ const credentials = @import("../../auth/credentials.zig");
 const tool_dispatch = @import("../../tooling/tool_dispatch.zig");
 const tool_result_errors = @import("../../tooling/tool_result_errors.zig");
 const tooling_tool_admission = @import("../../tooling/tool_admission.zig");
+const tool_intent = @import("../../tooling/tool_intent.zig");
 const hooks = @import("../../hooks/hooks.zig");
 const command_contract = @import("../../execution/command_contract.zig");
 const command_environment = @import("../../execution/command_environment.zig");
@@ -97,15 +98,17 @@ fn terminal_request_schema_advertised(
         const input_type = input_schema.object.get("type") orelse return false;
         if (input_type != .string or !std.mem.eql(u8, input_type.string, "object")) return false;
         const properties = input_schema.object.get("properties") orelse return false;
-        if (properties != .object or properties.object.count() != 1) return false;
+        if (properties != .object or properties.object.count() != 2) return false;
         const request = properties.object.get("request") orelse return false;
         if (request != .object) return false;
         const alternatives = request.object.get("oneOf") orelse return false;
         if (alternatives != .array or alternatives.array.items.len == 0) return false;
         const required = input_schema.object.get("required") orelse return false;
-        if (required != .array or required.array.items.len != 1) return false;
-        const required_name = required.array.items[0];
-        if (required_name != .string or !std.mem.eql(u8, required_name.string, "request")) return false;
+        if (required != .array or required.array.items.len != 2) return false;
+        const intent_name = required.array.items[0];
+        const request_name = required.array.items[1];
+        if (intent_name != .string or !std.mem.eql(u8, intent_name.string, tool_intent.field)) return false;
+        if (request_name != .string or !std.mem.eql(u8, request_name.string, "request")) return false;
         const additional_properties = input_schema.object.get("additionalProperties") orelse return false;
         return additional_properties == .bool and !additional_properties.bool;
     }
@@ -175,9 +178,36 @@ fn normalize_terminal_request_tool_calls(
     return normalized orelse source;
 }
 
+fn stripToolCallIntents(
+    alloc: Allocator,
+    source: []const ToolCall,
+) Allocator.Error![]const ToolCall {
+    var stripped: ?[]ToolCall = null;
+    errdefer if (stripped) |calls| {
+        for (calls, source) |call, original| {
+            if (call.arguments_json.ptr != original.arguments_json.ptr) {
+                alloc.free(@constCast(call.arguments_json));
+            }
+        }
+        alloc.free(calls);
+    };
+
+    for (source, 0..) |call, index| {
+        const arguments_json = try tool_intent.stripAlloc(alloc, call.arguments_json) orelse continue;
+        if (stripped == null) {
+            stripped = alloc.dupe(ToolCall, source) catch |err| {
+                alloc.free(arguments_json);
+                return err;
+            };
+        }
+        stripped.?[index].arguments_json = arguments_json;
+    }
+    return stripped orelse source;
+}
+
 test "terminal request normalization follows effective attempt advertisement" {
     const nested_tools_json =
-        "[{\"type\":\"function\",\"name\":\"terminal\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"request\":{\"oneOf\":[{\"type\":\"object\"}]}},\"required\":[\"request\"],\"additionalProperties\":false}}]";
+        "[{\"type\":\"function\",\"name\":\"terminal\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"i\":{\"type\":\"string\"},\"request\":{\"oneOf\":[{\"type\":\"object\"}]}},\"required\":[\"i\",\"request\"],\"additionalProperties\":false}}]";
     const flat_tools_json =
         "[{\"type\":\"function\",\"name\":\"terminal\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"action\":{\"type\":\"string\"}},\"required\":[\"action\"],\"additionalProperties\":false}}]";
 
@@ -191,6 +221,25 @@ test "terminal request normalization follows effective attempt advertisement" {
     try std.testing.expect(!terminal_request_normalization_eligible(false, .unavailable));
 }
 
+test "tool intent normalization strips reserved metadata before execution" {
+    const alloc = std.testing.allocator;
+    const source = [_]ToolCall{
+        .{ .id = "lsp", .name = "lsp", .arguments_json = "{\"i\":\"Checking diagnostics\",\"action\":\"diagnostics\",\"file\":\"index.html\"}" },
+        .{ .id = "read", .name = "read_file", .arguments_json = "{\"path\":\"README.md\"}" },
+    };
+    const stripped = try stripToolCallIntents(alloc, &source);
+    defer {
+        for (stripped, source) |call, original| {
+            if (call.arguments_json.ptr != original.arguments_json.ptr) alloc.free(@constCast(call.arguments_json));
+        }
+        if (stripped.ptr != source[0..].ptr) alloc.free(@constCast(stripped));
+    }
+    try std.testing.expectEqualStrings(
+        "{\"action\":\"diagnostics\",\"file\":\"index.html\"}",
+        stripped[0].arguments_json,
+    );
+    try std.testing.expectEqualStrings(source[1].arguments_json, stripped[1].arguments_json);
+}
 test "terminal request normalization unwraps only exact eligible native calls" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
@@ -274,7 +323,7 @@ test "terminal request normalization unwraps only exact eligible native calls" {
 
 fn check_terminal_request_normalization_allocation_failures(alloc: Allocator) !void {
     const nested_tools_json =
-        "[{\"type\":\"function\",\"name\":\"terminal\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"request\":{\"oneOf\":[{\"type\":\"object\"}]}},\"required\":[\"request\"],\"additionalProperties\":false}}]";
+        "[{\"type\":\"function\",\"name\":\"terminal\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"i\":{\"type\":\"string\"},\"request\":{\"oneOf\":[{\"type\":\"object\"}]}},\"required\":[\"i\",\"request\"],\"additionalProperties\":false}}]";
     if (!try terminal_request_schema_advertised(alloc, nested_tools_json)) {
         return error.TestUnexpectedResult;
     }
@@ -3686,6 +3735,10 @@ fn processQueuedPromptLoop(
                     );
                 }
             }
+            stream_result.completion.tool_calls = try stripToolCallIntents(
+                arena,
+                stream_result.completion.tool_calls,
+            );
             stream_result.completion.tool_calls = try normalize_terminal_request_tool_calls(
                 arena,
                 deps.tool_registry,

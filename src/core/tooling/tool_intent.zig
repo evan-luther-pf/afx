@@ -61,6 +61,22 @@ pub fn extract(json: []const u8, out: []u8) ?[]const u8 {
     return null;
 }
 
+/// Removes the reserved top-level intent field before validation or execution.
+/// Malformed arguments are left untouched for the ordinary error path.
+pub fn stripAlloc(alloc: std.mem.Allocator, json: []const u8) std.mem.Allocator.Error!?[]u8 {
+    var parsed = std.json.parseFromSlice(std.json.Value, alloc, json, .{}) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return null,
+    };
+    defer parsed.deinit();
+    if (parsed.value != .object or !parsed.value.object.orderedRemove(field)) return null;
+
+    var out: std.Io.Writer.Allocating = .init(alloc);
+    defer out.deinit();
+    std.json.Stringify.value(parsed.value, .{}, &out.writer) catch return error.OutOfMemory;
+    return try out.toOwnedSlice();
+}
+
 fn intentValueStart(json: []const u8) ?usize {
     var cursor: usize = 0;
     while (cursor < json.len and std.ascii.isWhitespace(json[cursor])) cursor += 1;
@@ -159,4 +175,17 @@ test "intent extraction ignores nested and string-content keys" {
             &buf,
         ).?,
     );
+}
+
+test "intent stripping removes only the reserved top-level field" {
+    const stripped = (try stripAlloc(
+        std.testing.allocator,
+        "{\"i\":\"Checking diagnostics\",\"file\":\"index.html\",\"nested\":{\"i\":\"keep\"}}",
+    )).?;
+    defer std.testing.allocator.free(stripped);
+    try std.testing.expectEqualStrings(
+        "{\"file\":\"index.html\",\"nested\":{\"i\":\"keep\"}}",
+        stripped,
+    );
+    try std.testing.expect(try stripAlloc(std.testing.allocator, "{\"file\":\"index.html\"}") == null);
 }

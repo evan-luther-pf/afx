@@ -993,16 +993,17 @@ pub fn Runtime(comptime App: type) type {
                 .provisional, .authoritative_started => true,
                 .progress, .terminal, .turn_finished => false,
             };
-            if (starts_tool_stretch) {
-                _ = app.stream.clearIntent();
-                if (lifecycle == .authoritative_started) {
-                    if (lifecycle.authoritative_started.arguments_json) |arguments_json| {
+            if (starts_tool_stretch) switch (lifecycle) {
+                .provisional => _ = app.stream.clearIntent(),
+                .authoritative_started => |started| {
+                    if (started.arguments_json) |arguments_json| {
                         var intent_buf: [tool_intent.max_bytes]u8 = undefined;
                         if (tool_intent.extract(arguments_json, &intent_buf)) |intent| {
                             _ = app.stream.setIntent(intent);
                         }
                     }
-                }
+                },
+                .progress, .terminal, .turn_finished => unreachable,
             } else switch (lifecycle) {
                 .terminal, .turn_finished => _ = app.stream.clearIntent(),
                 .progress => {},

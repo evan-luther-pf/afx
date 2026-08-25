@@ -59,7 +59,7 @@ const vision_read_and_terminal_tools = [_]tool_dispatch.Tool{
     builtin_tools.terminal,
 };
 const terminal_nested_tools_json =
-    "[{\"type\":\"function\",\"name\":\"terminal\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"request\":{\"oneOf\":[{\"type\":\"object\"}]}},\"required\":[\"request\"],\"additionalProperties\":false}}]";
+    "[{\"type\":\"function\",\"name\":\"terminal\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"i\":{\"type\":\"string\"},\"request\":{\"oneOf\":[{\"type\":\"object\"}]}},\"required\":[\"i\",\"request\"],\"additionalProperties\":false}}]";
 
 const VisionAndReadExecutor = struct {
     vision: ExecuteDelegate,

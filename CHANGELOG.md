@@ -1,14 +1,20 @@
 # afx
 
-## 0.0.7
+## 0.0.8
 
 <!-- release:start -->
+
+### Bug Fixes
+
+- **Intent-safe tool execution:** Strip the reserved live-status intent field before local validation and execution so strict tools such as LSP receive only their declared arguments
+
+<!-- release:end -->
+
+## 0.0.7
 
 ### New Features
 
 - **Intelligent activity status:** Show each model-supplied tool intent in the live activity bar as arguments stream, then retain it through execution with elapsed time and token progress
-
-<!-- release:end -->
 
 ## 0.0.6
 
