@@ -470,6 +470,7 @@ pub const WorkerEvent = union(enum) {
     /// A tool call that publishes no status row of its own began streaming its
     /// arguments. The turn is working, with nothing to print until it lands.
     tool_payload_started,
+    intent_status: []u8,
     diff_block: diff_mod.DiffEntryPayload,
     finish_prompt: types.FinishedPrompt,
     session_grant: types.PermissionGrant,
@@ -2560,6 +2561,7 @@ pub fn dupeWorkerEvent(alloc: std.mem.Allocator, event: WorkerEvent) !WorkerEven
         },
         .turn_token_update => |update| .{ .turn_token_update = update },
         .tool_payload_started => .tool_payload_started,
+        .intent_status => |text| .{ .intent_status = try alloc.dupe(u8, text) },
         .diff_block => |payload| blk: {
             const preview = try alloc.dupe(u8, payload.preview);
             errdefer alloc.free(preview);
@@ -2624,6 +2626,7 @@ pub fn freeWorkerEvent(alloc: std.mem.Allocator, event: WorkerEvent) void {
             if (lifecycle_id) |id| alloc.free(@constCast(id.call_id));
         },
         .tool_lifecycle => |lifecycle| freeToolLifecycleEvent(alloc, lifecycle),
+        .intent_status => |text| alloc.free(text),
         .diff_block => |payload| diff_mod.freeDiffEntryPayload(alloc, payload),
         .finish_prompt => |finished| types.freeFinishedPrompt(alloc, finished),
         .session_grant => |grant| {

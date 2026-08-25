@@ -203,6 +203,26 @@ pub const StreamState = struct {
     /// own, so the turn is producing output the transcript cannot show yet.
     /// Cleared as soon as assistant text resumes or the tool itself starts.
     composing_tool_payload: bool = false,
+    intent: [96]u8 = undefined,
+    intent_len: u8 = 0,
+
+    pub fn setIntent(self: *StreamState, value: []const u8) bool {
+        const len: u8 = @intCast(@min(value.len, self.intent.len));
+        if (self.intent_len == len and std.mem.eql(u8, self.intent[0..len], value[0..len])) return false;
+        @memcpy(self.intent[0..len], value[0..len]);
+        self.intent_len = len;
+        return true;
+    }
+
+    pub fn clearIntent(self: *StreamState) bool {
+        if (self.intent_len == 0) return false;
+        self.intent_len = 0;
+        return true;
+    }
+
+    pub fn intentText(self: *const StreamState) []const u8 {
+        return self.intent[0..self.intent_len];
+    }
 };
 
 pub const RouteRecoveryUnsafeReason = enum {

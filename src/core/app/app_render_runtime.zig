@@ -979,6 +979,7 @@ pub fn Runtime(comptime App: type) type {
                 .open_model_picker,
                 .turn_token_update,
                 .tool_payload_started,
+                .intent_status,
                 .finish_prompt,
                 .session_grant,
                 => {},

@@ -67,6 +67,7 @@ Use `/model` to choose a model, `/providers` to manage accounts and keys, `/sess
 
 - Reads, searches, edits, and writes local files
 - Runs commands and keeps long-running terminal sessions alive
+- Shows the agent's current intent in the live activity bar
 - Uses LSP for definitions, references, diagnostics, and safe renames
 - Drives native debuggers through DAP
 - Searches and reads the public web with cited sources

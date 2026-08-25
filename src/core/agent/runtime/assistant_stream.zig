@@ -9,6 +9,7 @@ const assistant_presentation = @import("../assistant_presentation.zig");
 const io_mod = @import("../../shared/io.zig");
 const file_mutation = @import("../../tooling/file_mutation.zig");
 const tool_dispatch = @import("../../tooling/tool_dispatch.zig");
+const tool_intent = @import("../../tooling/tool_intent.zig");
 const worker_runtime = @import("../worker_runtime.zig");
 const test_builtin_tools = if (@import("builtin").is_test)
     @import("../../../builtins/tools.zig")
@@ -77,6 +78,10 @@ pub const StreamChunkContext = struct {
     continuation_resolved: bool = true,
     initial_line_prefix: std.ArrayList(u8) = .empty,
     provisional_statuses: runtime_tool_presentation.ProvisionalToolStatuses = .{},
+    intent_probe: [512]u8 = undefined,
+    intent_probe_len: u16 = 0,
+    last_intent: [tool_intent.max_bytes]u8 = undefined,
+    last_intent_len: u8 = 0,
 
     fn markModelOutput(self: *StreamChunkContext) void {
         if (self.first_model_output_at_ms == null) self.first_model_output_at_ms = io_mod.milliTimestamp();
@@ -127,6 +132,8 @@ pub const StreamChunkContext = struct {
         self.saw_provider_tool_start = false;
         self.saw_visible_text_after_tool_start = false;
         self.first_model_output_at_ms = null;
+        self.intent_probe_len = 0;
+        self.last_intent_len = 0;
     }
 
     /// Restores durable partial source before a restarted turn sends anything.
@@ -207,13 +214,37 @@ fn publishToolPayloadStarted(stream_ctx: *StreamChunkContext) void {
     };
 }
 
+fn publishIntentStatus(stream_ctx: *StreamChunkContext, intent: []const u8) void {
+    const owned = stream_ctx.alloc.dupe(u8, intent) catch |err| {
+        debug_trace.logf("agent", "tool intent allocation failed err={s}", .{@errorName(err)});
+        return;
+    };
+    stream_ctx.hooks.push_event(stream_ctx.hooks.ctx, .{ .intent_status = owned }) catch |err| {
+        debug_trace.logf("agent", "tool intent publication failed err={s}", .{@errorName(err)});
+    };
+}
+
 pub fn onStreamToolInputChunk(ctx: *anyopaque, chunk: []const u8) void {
     const stream_ctx: *StreamChunkContext = @ptrCast(@alignCast(ctx));
     if (stream_ctx.token_progress) |progress| {
         pushTokenProgressUpdate(stream_ctx, progress.consumeToolInput(chunk)) catch |err| {
-            debug_trace.logf("agent", "token progress publication failed source=tool_input err={s}", .{@errorName(err)});
+            debug_trace.logf("agent", "tool input progress publication failed err={s}", .{@errorName(err)});
         };
     }
+    const start: usize = stream_ctx.intent_probe_len;
+    const room = stream_ctx.intent_probe.len - start;
+    const copied = @min(room, chunk.len);
+    if (copied > 0) {
+        @memcpy(stream_ctx.intent_probe[start .. start + copied], chunk[0..copied]);
+        stream_ctx.intent_probe_len += @intCast(copied);
+    }
+    var intent_buf: [tool_intent.max_bytes]u8 = undefined;
+    const intent = tool_intent.extract(stream_ctx.intent_probe[0..stream_ctx.intent_probe_len], &intent_buf) orelse return;
+    if (stream_ctx.last_intent_len == intent.len and
+        std.mem.eql(u8, stream_ctx.last_intent[0..stream_ctx.last_intent_len], intent)) return;
+    @memcpy(stream_ctx.last_intent[0..intent.len], intent);
+    stream_ctx.last_intent_len = @intCast(intent.len);
+    publishIntentStatus(stream_ctx, intent);
 }
 
 pub fn pushTokenProgressUpdate(stream_ctx: *StreamChunkContext, update: runtime_telemetry.TokenProgressUpdate) !void {
@@ -229,6 +260,9 @@ pub fn pushTokenProgressUpdate(stream_ctx: *StreamChunkContext, update: runtime_
 
 pub fn onStreamToolStart(ctx: *anyopaque, tool_id: []const u8, tool_name: []const u8, label_value: ?[]const u8) void {
     const stream_ctx: *StreamChunkContext = @ptrCast(@alignCast(ctx));
+    stream_ctx.intent_probe_len = 0;
+    stream_ctx.last_intent_len = 0;
+    publishIntentStatus(stream_ctx, "");
     const first_tool_in_step = !stream_ctx.saw_tool_start;
     recordStreamToolStart(ctx, tool_name);
     const preflight = runtime_tool_presentation.ProvisionalToolStatuses.preflight(stream_ctx.hooks.tool_registry, tool_name) orelse {
@@ -701,6 +735,7 @@ const StreamCapture = struct {
     code_blocks: std.ArrayList(assistant_presentation.CodeBlockPayload) = .empty,
     thematic_rule_count: usize = 0,
     token_progress_updates: std.ArrayList(types.TurnTokenProgress) = .empty,
+    intents: std.ArrayList([]u8) = .empty,
     trace: std.ArrayList(StreamTraceEntry) = .empty,
     presentation_order: std.ArrayList(PresentationEntry) = .empty,
     capture_alloc: Allocator = std.testing.allocator,
@@ -724,6 +759,8 @@ const StreamCapture = struct {
         for (self.code_blocks.items) |*block| block.deinit(alloc);
         self.code_blocks.deinit(alloc);
         self.token_progress_updates.deinit(alloc);
+        for (self.intents.items) |intent| alloc.free(intent);
+        self.intents.deinit(alloc);
         self.trace.deinit(alloc);
         self.presentation_order.deinit(alloc);
     }
@@ -812,6 +849,10 @@ const StreamCapture = struct {
             .turn_token_update => |update| update,
             .tool_payload_started => {
                 try self.trace.append(self.capture_alloc, .tool_payload_started);
+                return;
+            },
+            .intent_status => |intent| {
+                try self.intents.append(self.capture_alloc, intent);
                 return;
             },
             else => return,
@@ -954,6 +995,23 @@ fn assert_frozen_ansi_span_fixture() !void {
         try std.testing.expectEqualStrings(expected, actual);
     }
     try std.testing.expect(std.mem.find(u8, capture.text_spans.items[3], "\x1b]8;") == null);
+}
+
+test "streamed tool intent publishes as soon as its JSON string closes" {
+    const alloc = std.testing.allocator;
+    var capture = StreamCapture{};
+    defer capture.deinit(alloc);
+    var hook_set = capture.hooks();
+    var stream_ctx = StreamChunkContext{ .hooks = &hook_set, .turn_id = 1, .alloc = alloc };
+    defer stream_ctx.deinit();
+
+    onStreamToolStart(&stream_ctx, "read_1", "read_file", null);
+    onStreamToolInputChunk(&stream_ctx, "{\"i\":\"Reading");
+    onStreamToolInputChunk(&stream_ctx, " source files\",\"path\":\"src\"}");
+
+    try std.testing.expectEqual(@as(usize, 2), capture.intents.items.len);
+    try std.testing.expectEqualStrings("", capture.intents.items[0]);
+    try std.testing.expectEqualStrings("Reading source files", capture.intents.items[1]);
 }
 
 test "streamed tool starts emit lifecycle only for identified read-only tools" {
@@ -1493,6 +1551,23 @@ test "streamed tool start flushes presentation before separator and lifecycle" {
     try std.testing.expectEqual(StreamTraceEntry{ .text = 0 }, newline_capture.trace.items[0]);
     try std.testing.expectEqual(StreamTraceEntry{ .provisional = 0 }, newline_capture.trace.items[1]);
     try std.testing.expectEqual(StreamTraceEntry{ .progress = 1 }, newline_capture.trace.items[2]);
+}
+
+test "streamed tool intent publishes as soon as the leading field completes" {
+    const alloc = std.testing.allocator;
+    var capture = StreamCapture{};
+    defer capture.deinit(alloc);
+    var hook_set = capture.hooks();
+    var stream_ctx = StreamChunkContext{ .hooks = &hook_set, .turn_id = 1, .alloc = alloc };
+    defer stream_ctx.deinit();
+
+    onStreamToolStart(&stream_ctx, "read_1", "read_file", null);
+    onStreamToolInputChunk(&stream_ctx, "{\"i\":\"Reading");
+    try std.testing.expectEqual(@as(usize, 1), capture.intents.items.len);
+    try std.testing.expectEqualStrings("", capture.intents.items[0]);
+    onStreamToolInputChunk(&stream_ctx, " source files\",\"path\":\"src\"}");
+    try std.testing.expectEqual(@as(usize, 2), capture.intents.items.len);
+    try std.testing.expectEqualStrings("Reading source files", capture.intents.items[1]);
 }
 
 test "assistant prose before the first tool starts a new presentation group" {

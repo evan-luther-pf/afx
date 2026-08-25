@@ -1257,6 +1257,7 @@ fn livePresentationEventBytes(event: worker_runtime.WorkerEvent) ?usize {
         .append_user_feedback,
         .api_status_text,
         => |text| text.len,
+        .intent_status => |text| text.len,
         .command_output_complete,
         .clear_route_recovery_status,
         .route_recovery_status,

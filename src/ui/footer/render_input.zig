@@ -469,6 +469,11 @@ fn thinkingActivityProjection(
     ctx: RenderContext,
 ) ActivityProjection {
     _ = shell;
+    if (ctx.stream.active) {
+        if (activity_status.buildIntentLabel(buf, ctx.stream, ctx.now_ms)) |label| {
+            return .{ .turn_thinking = .{ .label = label } };
+        }
+    }
     // The markerless counter row belongs to the response: the text landing on
     // screen is its own progress report, and it keeps the row through the gaps
     // where the pacer waits on the next chunk. Once the model switches to a
@@ -938,6 +943,17 @@ test "frame-owned activity shows live streaming token progress" {
     switch (frameOwnedActivityProjection(&stalled_buf, &shell, composing_ctx, null)) {
         .turn_thinking => |thinking| {
             try std.testing.expectEqualStrings("• (12s) (↑50k ↓1.2k)", thinking.label);
+            try std.testing.expectEqual(ActivityProjection.Tone.thinking, thinking.tone);
+        },
+        .none, .tool_slot => return error.TestUnexpectedResult,
+    }
+
+    var intent_ctx = composing_ctx;
+    _ = intent_ctx.stream.setIntent("Inspecting provider state");
+    var intent_buf: [256]u8 = undefined;
+    switch (frameOwnedActivityProjection(&intent_buf, &shell, intent_ctx, null)) {
+        .turn_thinking => |thinking| {
+            try std.testing.expectEqualStrings("• Inspecting provider state (12s) (↑50k ↓1.2k)", thinking.label);
             try std.testing.expectEqual(ActivityProjection.Tone.thinking, thinking.tone);
         },
         .none, .tool_slot => return error.TestUnexpectedResult,

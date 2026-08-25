@@ -101,7 +101,19 @@ pub fn writeBuiltinFunctionSchema(
     const description = try cappedDescriptionAlloc(alloc, schema.description);
     defer alloc.free(description);
     try writeFunctionSchemaOpen(writer, schema.name, description);
-    try writeObjectSchema(alloc, writer, schema.input_schema);
+    try writeObjectSchema(alloc, writer, schema.input_schema, false);
+    try writer.writeByte('}');
+}
+
+pub fn writeBuiltinFunctionSchemaWithIntent(
+    alloc: std.mem.Allocator,
+    writer: *std.Io.Writer,
+    schema: FunctionSchema,
+) !void {
+    const description = try cappedDescriptionAlloc(alloc, schema.description);
+    defer alloc.free(description);
+    try writeFunctionSchemaOpen(writer, schema.name, description);
+    try writeObjectSchema(alloc, writer, schema.input_schema, true);
     try writer.writeByte('}');
 }
 
@@ -132,6 +144,7 @@ fn writeObjectSchema(
     alloc: std.mem.Allocator,
     writer: *std.Io.Writer,
     schema: ObjectSchema,
+    inject_intent: bool,
 ) anyerror!void {
     if (schema.one_of.len > 0) {
         if (schema.properties.len > 0 or
@@ -145,15 +158,21 @@ fn writeObjectSchema(
         try writer.writeAll("{\"oneOf\":[");
         for (schema.one_of, 0..) |alternative, index| {
             if (index > 0) try writer.writeByte(',');
-            try writeObjectSchema(alloc, writer, alternative);
+            try writeObjectSchema(alloc, writer, alternative, inject_intent);
         }
         try writer.writeAll("]}");
         return;
     }
 
     try writer.writeAll("{\"type\":\"object\",\"properties\":{");
-    for (schema.properties, 0..) |property, index| {
-        if (index > 0) try writer.writeByte(',');
+    var property_index: usize = 0;
+    if (inject_intent) {
+        try writer.writeAll("\"i\":{\"type\":\"string\",\"description\":\"Capitalized 2-6-word present-participle intent; no period\"}");
+        property_index = 1;
+    }
+    for (schema.properties) |property| {
+        if (property_index > 0) try writer.writeByte(',');
+        property_index += 1;
         try std.json.Stringify.value(property.name, .{}, writer);
         try writer.writeByte(':');
         try writePropertySchema(alloc, writer, property);
@@ -165,10 +184,16 @@ fn writeObjectSchema(
     }
     if (schema.min_properties != no_u32_bound) try writer.print(",\"minProperties\":{d}", .{schema.min_properties});
     if (schema.max_properties != no_u32_bound) try writer.print(",\"maxProperties\":{d}", .{schema.max_properties});
-    if (schema.required.len > 0) {
+    if (schema.required.len > 0 or inject_intent) {
         try writer.writeAll(",\"required\":[");
-        for (schema.required, 0..) |name, index| {
-            if (index > 0) try writer.writeByte(',');
+        var required_index: usize = 0;
+        if (inject_intent) {
+            try writer.writeAll("\"i\"");
+            required_index = 1;
+        }
+        for (schema.required) |name| {
+            if (required_index > 0) try writer.writeByte(',');
+            required_index += 1;
             try std.json.Stringify.value(name, .{}, writer);
         }
         try writer.writeByte(']');
@@ -202,7 +227,7 @@ fn writePropertySchema(
     if (property.shape) |shape| {
         switch (shape.*) {
             .object => |object_schema| {
-                try writeObjectSchema(alloc, writer, object_schema.*);
+                try writeObjectSchema(alloc, writer, object_schema.*, false);
                 return;
             },
             else => {},
@@ -250,7 +275,7 @@ fn writePropertySchema(
             },
             .array_objects => |items| {
                 try writer.writeAll(",\"items\":");
-                try writeObjectSchema(alloc, writer, items.*);
+                try writeObjectSchema(alloc, writer, items.*, false);
             },
             else => {},
         }
@@ -531,6 +556,33 @@ test "builtinFunctionSchemaJsonAlloc serializes every supported property shape" 
         "integer",
         record_items.get("properties").?.object.get("id").?.object.get("type").?.string,
     );
+}
+
+test "provider-bound built-in schemas require intent only at root shapes" {
+    const alloc = std.testing.allocator;
+    var out: std.Io.Writer.Allocating = .init(alloc);
+    defer out.deinit();
+    try writeBuiltinFunctionSchemaWithIntent(alloc, &out.writer, .{
+        .name = "read_file",
+        .description = "read",
+        .input_schema = .{
+            .properties = &.{.{ .name = "path", .json_type = .string }},
+            .required = &.{"path"},
+            .additional_properties = false,
+        },
+    });
+    var parsed = try std.json.parseFromSlice(std.json.Value, alloc, out.written(), .{});
+    defer parsed.deinit();
+    const input = parsed.value.object.get("inputSchema").?.object;
+    const properties = input.get("properties").?.object;
+    try std.testing.expect(properties.get("i") != null);
+    try std.testing.expectEqualStrings(
+        "Capitalized 2-6-word present-participle intent; no period",
+        properties.get("i").?.object.get("description").?.string,
+    );
+    const required = input.get("required").?.array.items;
+    try std.testing.expectEqualStrings("i", required[0].string);
+    try std.testing.expectEqualStrings("path", required[1].string);
 }
 
 test "dynamicFunctionSchemaJsonAlloc wraps rendered input schema in the flattened envelope" {

@@ -947,7 +947,7 @@ fn writeBuiltinTool(
         try guidance_writer.writeAll(tool.description);
         return;
     }
-    try gateway_schema.writeBuiltinFunctionSchema(alloc, tools_writer, tool.gateway_schema);
+    try gateway_schema.writeBuiltinFunctionSchemaWithIntent(alloc, tools_writer, tool.gateway_schema);
 }
 
 /// A provider-executed tool is never dispatched locally, so an unsettled `ask`

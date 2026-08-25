@@ -121,6 +121,7 @@ const tools_and_verification_section =
     \\# Tools and verification
     \\
     \\- Choose the smallest suitable available capability.
+    \\- Most tools require `i`: a capitalized 2-6-word present-participle intent with no period. Describe the immediate work, not the tool name.
     \\- After code changes, verify the relevant behavior with direct checks such as formatting, a focused test, build, CLI run, or eval before claiming it works. Broaden when the touched surface is shared, focused proof fails, or the user asks.
     \\- If the user names a test file, run it directly or infer the closest command from local conventions. When no test is named, inspect only enough changed-file metadata to select the checks.
     \\- Prefer build, test, typecheck, CLI, or other direct checks appropriate to the change.

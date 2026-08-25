@@ -32,6 +32,17 @@ pub fn buildThinkingLabel(buf: []u8, stream: StreamState, now_ms: i64) ?[]const 
     return out.buffered();
 }
 
+pub fn buildIntentLabel(buf: []u8, stream: StreamState, now_ms: i64) ?[]const u8 {
+    const intent = stream.intentText();
+    if (intent.len == 0) return null;
+    var out: std.Io.Writer = .fixed(buf);
+    out.writeAll("• ") catch return intent;
+    out.writeAll(intent) catch return out.buffered();
+    appendThinkingElapsedSuffix(&out, stream, now_ms) catch return out.buffered();
+    appendTurnTokenSuffix(&out, stream) catch return out.buffered();
+    return out.buffered();
+}
+
 pub const thinking_blink_half_period_ms: i64 = 500;
 
 /// The instant the Thinking clock reads. While afx waits on user input the
@@ -209,6 +220,20 @@ pub fn appendTokenProgressSuffix(writer: *std.Io.Writer, progress: types.TurnTok
 
 pub fn appendTurnTokenSuffix(writer: *std.Io.Writer, stream: StreamState) !void {
     try appendTokenProgressSuffix(writer, stream.token_progress);
+}
+
+test "buildIntentLabel preserves live timing and usage" {
+    var stream = StreamState{
+        .active = true,
+        .turn_started_ms = 1_000,
+        .token_progress = .{ .input_tokens = 10, .output_tokens = 20 },
+    };
+    _ = stream.setIntent("Reading source files");
+    var buf: [96]u8 = undefined;
+    try std.testing.expectEqualStrings(
+        "• Reading source files (5s) (↑10 ↓20)",
+        buildIntentLabel(&buf, stream, 6_000).?,
+    );
 }
 
 test "buildThinkingLabel returns thinking when no tool activity" {

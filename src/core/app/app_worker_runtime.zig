@@ -7,6 +7,7 @@ const debug_trace = @import("../shared/debug_trace.zig");
 const diff_mod = @import("../output/diff.zig");
 const file_mutation_contract = @import("../tooling/file_mutation_contract.zig");
 const command_output_content = @import("../tooling/command_output_content.zig");
+const tool_intent = @import("../tooling/tool_intent.zig");
 const io_mod = @import("../shared/io.zig");
 const permission_request = @import("../permissions/permission_request.zig");
 const task_helpers = @import("../tasks/task_helpers.zig");
@@ -197,6 +198,7 @@ pub fn Runtime(comptime App: type) type {
                 .command_output,
                 .turn_token_update,
                 .tool_payload_started,
+                .intent_status,
                 .diff_block,
                 => .drop,
                 .route_recovery_status => |status| if (status.action == .paused)
@@ -634,6 +636,7 @@ pub fn Runtime(comptime App: type) type {
             if (!app.stream.active and app.pacer.hasCompletedAssistantPresentationTail()) {
                 return activity_status.buildThinkingLabel(buf, .{ .active = true }, 0);
             }
+            if (activity_status.buildIntentLabel(buf, app.stream, 0)) |label| return label;
             if (activity_status.buildThinkingLabel(buf, app.stream, 0)) |label| return label;
             if (app.stream.last_activity_kind == .ask) return ui_render.ask_activity_label;
             switch (presenter.snapshot().activity) {
@@ -878,6 +881,16 @@ pub fn Runtime(comptime App: type) type {
                         app.stream.composing_tool_payload = true;
                         app.shell.render_requests.request(.footer);
                     },
+                    .intent_status => |text| {
+                        const changed = if (text.len == 0)
+                            app.stream.clearIntent()
+                        else
+                            app.stream.setIntent(text);
+                        if (changed) {
+                            app.shell.render_requests.requestAnimationReset();
+                            app.shell.render_requests.request(.footer);
+                        }
+                    },
                     .diff_block => |payload| {
                         drain_owns_current = false;
                         try handlers.diff_block(handlers.ctx, payload);
@@ -980,6 +993,21 @@ pub fn Runtime(comptime App: type) type {
                 .provisional, .authoritative_started => true,
                 .progress, .terminal, .turn_finished => false,
             };
+            if (starts_tool_stretch) {
+                _ = app.stream.clearIntent();
+                if (lifecycle == .authoritative_started) {
+                    if (lifecycle.authoritative_started.arguments_json) |arguments_json| {
+                        var intent_buf: [tool_intent.max_bytes]u8 = undefined;
+                        if (tool_intent.extract(arguments_json, &intent_buf)) |intent| {
+                            _ = app.stream.setIntent(intent);
+                        }
+                    }
+                }
+            } else switch (lifecycle) {
+                .terminal, .turn_finished => _ = app.stream.clearIntent(),
+                .progress => {},
+                .provisional, .authoritative_started => unreachable,
+            }
             const transition = try presenter.apply(
                 app.alloc,
                 lifecycle,
@@ -1019,6 +1047,7 @@ pub fn Runtime(comptime App: type) type {
 
         fn markAssistantText(app: *App) void {
             app.stream.assistant_text_started = true;
+            _ = app.stream.clearIntent();
             app.stream.composing_tool_payload = false;
         }
 

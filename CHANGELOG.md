@@ -1,8 +1,16 @@
 # afx
 
-## 0.0.6
+## 0.0.7
 
 <!-- release:start -->
+
+### New Features
+
+- **Intelligent activity status:** Show each model-supplied tool intent in the live activity bar as arguments stream, then retain it through execution with elapsed time and token progress
+
+<!-- release:end -->
+
+## 0.0.6
 
 ### New Features
 
@@ -11,8 +19,6 @@
 ### Improvements
 
 - **Hashline reads and search:** Emit content-derived `[PATH#TAG]` headers and addressable line numbers from file reads and grep matches so edits reject stale or unseen anchors before touching disk
-
-<!-- release:end -->
 
 ## 0.0.5
 

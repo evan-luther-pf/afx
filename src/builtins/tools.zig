@@ -1963,7 +1963,7 @@ test "terminal gateway advertisement projects a provider-compatible object schem
     try std.testing.expect(input_schema.get("oneOf") == null);
     try std.testing.expectEqual(false, input_schema.get("additionalProperties").?.bool);
     const properties = input_schema.get("properties").?.object;
-    try std.testing.expectEqual(@as(usize, 1), properties.count());
+    try std.testing.expectEqual(@as(usize, 2), properties.count());
     const request_schema = properties.get("request").?.object;
     const branches = request_schema.get("oneOf").?.array.items;
     try std.testing.expectEqual(std.meta.tags(terminal_impl.Action).len, branches.len);
@@ -1984,8 +1984,9 @@ test "terminal gateway advertisement projects a provider-compatible object schem
         shell_properties.get("path").?.object.get("description").?.string,
     );
     const required = input_schema.get("required").?.array.items;
-    try std.testing.expectEqual(@as(usize, 1), required.len);
-    try std.testing.expectEqualStrings("request", required[0].string);
+    try std.testing.expectEqual(@as(usize, 2), required.len);
+    try std.testing.expectEqualStrings("i", required[0].string);
+    try std.testing.expectEqualStrings("request", required[1].string);
     const read_branch = branches[@intFromEnum(terminal_impl.Action.read)].object;
     const read_properties = read_branch.get("properties").?.object;
     try std.testing.expect(read_properties.get("cursor_segment") != null);
