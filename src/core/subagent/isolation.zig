@@ -1,7 +1,7 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const io_mod = @import("../shared/io.zig");
 const lsp_client = @import("../../tools/lsp/client.zig");
-
 const Allocator = std.mem.Allocator;
 const max_git_output_bytes: usize = 256 * 1024 * 1024;
 const max_untracked_bytes: usize = 256 * 1024 * 1024;
@@ -209,17 +209,29 @@ fn captureBaseline(alloc: Allocator, repo_root: []const u8) !Baseline {
         }
         const absolute = try std.fs.path.join(alloc, &.{ repo_root, path });
         defer alloc.free(absolute);
-        var file = std.Io.Dir.openFileAbsolute(io_mod.getIo(), absolute, .{}) catch return error.UnsupportedUntrackedEntry;
-        defer file.close(io_mod.getIo());
-        const stat = try file.stat(io_mod.getIo());
-        if (stat.kind != .file) return error.UnsupportedUntrackedEntry;
-        total_bytes = std.math.add(usize, total_bytes, @intCast(stat.size)) catch return error.IsolationBaselineTooLarge;
-        if (total_bytes > max_untracked_bytes) return error.IsolationBaselineTooLarge;
-        const content = try io_mod.readFileToEnd(alloc, &file, max_untracked_bytes);
-        defer alloc.free(content);
-        hasher.update(path);
-        hasher.update(content);
-        try untracked.append(alloc, try alloc.dupe(u8, path));
+        const stat = std.Io.Dir.cwd().statFile(io_mod.getIo(), absolute, .{ .follow_symlinks = false }) catch return error.UnsupportedUntrackedEntry;
+        if (stat.kind == .sym_link) {
+            var target_buf: [std.fs.max_path_bytes]u8 = undefined;
+            const target_len = std.Io.Dir.readLinkAbsolute(io_mod.getIo(), absolute, &target_buf) catch return error.UnsupportedUntrackedEntry;
+            const target_bytes = target_buf[0..target_len];
+            total_bytes = std.math.add(usize, total_bytes, target_bytes.len) catch return error.IsolationBaselineTooLarge;
+            if (total_bytes > max_untracked_bytes) return error.IsolationBaselineTooLarge;
+            hasher.update(path);
+            hasher.update(target_bytes);
+            try untracked.append(alloc, try alloc.dupe(u8, path));
+        } else if (stat.kind == .file) {
+            var file = std.Io.Dir.openFileAbsolute(io_mod.getIo(), absolute, .{ .follow_symlinks = false }) catch return error.UnsupportedUntrackedEntry;
+            defer file.close(io_mod.getIo());
+            total_bytes = std.math.add(usize, total_bytes, @intCast(stat.size)) catch return error.IsolationBaselineTooLarge;
+            if (total_bytes > max_untracked_bytes) return error.IsolationBaselineTooLarge;
+            const content = try io_mod.readFileToEnd(alloc, &file, max_untracked_bytes);
+            defer alloc.free(content);
+            hasher.update(path);
+            hasher.update(content);
+            try untracked.append(alloc, try alloc.dupe(u8, path));
+        } else {
+            return error.UnsupportedUntrackedEntry;
+        }
     }
     var digest: [32]u8 = undefined;
     hasher.final(&digest);
@@ -233,7 +245,16 @@ fn copyUntracked(alloc: Allocator, source_root: []const u8, destination_root: []
         const destination = try std.fs.path.join(alloc, &.{ destination_root, path });
         defer alloc.free(destination);
         if (std.fs.path.dirname(destination)) |parent| try io_mod.makeDirRecursive(parent);
-        try io_mod.copyFileAtomic(alloc, source, destination);
+        const stat = try std.Io.Dir.cwd().statFile(io_mod.getIo(), source, .{ .follow_symlinks = false });
+        if (stat.kind == .sym_link) {
+            var target_buf: [std.fs.max_path_bytes]u8 = undefined;
+            const target_len = try std.Io.Dir.readLinkAbsolute(io_mod.getIo(), source, &target_buf);
+            const target = target_buf[0..target_len];
+            var cwd = std.Io.Dir.cwd();
+            try cwd.symLink(io_mod.getIo(), target, destination, .{});
+        } else {
+            try io_mod.copyFileAtomic(alloc, source, destination);
+        }
     }
 }
 
@@ -456,4 +477,50 @@ test "isolated worktree retains patch on stale baseline and cancellation cleans 
     defer cancelled_result.deinit(alloc);
     try std.testing.expect(std.mem.find(u8, cancelled_result.summary, "not applied") != null);
     try std.testing.expectError(error.FileNotFound, std.Io.Dir.accessAbsolute(io_mod.getIo(), cancelled.workspace, .{}));
+}
+
+test "isolated worktree preserves untracked symlinks without following" {
+    if (comptime builtin.os.tag == .windows) return error.SkipZigTest;
+    const alloc = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const repo = try initTestRepo(alloc, &tmp);
+    defer alloc.free(repo);
+    const temp_root = try io_mod.dirRealpathAlloc(alloc, tmp.dir, ".");
+    defer alloc.free(temp_root);
+    const storage = try std.fs.path.join(alloc, &.{ temp_root, "isolation-store" });
+    defer alloc.free(storage);
+
+    const parent_target = try std.fs.path.join(alloc, &.{ repo, "target.txt" });
+    defer alloc.free(parent_target);
+    try testWrite(parent_target, "target content\n");
+
+    const parent_link = try std.fs.path.join(alloc, &.{ repo, "link.txt" });
+    defer alloc.free(parent_link);
+    var cwd = std.Io.Dir.cwd();
+    cwd.symLink(io_mod.getIo(), "target.txt", parent_link, .{}) catch |err| switch (err) {
+        error.AccessDenied, error.FileSystem => return error.SkipZigTest,
+        else => return err,
+    };
+
+    var prepared = try prepareWithRoot(alloc, repo, "child-symlink", true, storage);
+    defer prepared.deinit(alloc);
+    defer cleanupWithRoot(alloc, "child-symlink", storage);
+
+    const child_link = try std.fs.path.join(alloc, &.{ prepared.workspace, "link.txt" });
+    defer alloc.free(child_link);
+    const stat = try std.Io.Dir.cwd().statFile(io_mod.getIo(), child_link, .{ .follow_symlinks = false });
+    try std.testing.expectEqual(std.Io.File.Kind.sym_link, stat.kind);
+
+    var target_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const target_len = try std.Io.Dir.readLinkAbsolute(io_mod.getIo(), child_link, &target_buf);
+    try std.testing.expectEqualStrings("target.txt", target_buf[0..target_len]);
+
+    const child_target = try std.fs.path.join(alloc, &.{ prepared.workspace, "target.txt" });
+    defer alloc.free(child_target);
+    const target_stat = try std.Io.Dir.cwd().statFile(io_mod.getIo(), child_target, .{ .follow_symlinks = false });
+    try std.testing.expectEqual(std.Io.File.Kind.file, target_stat.kind);
+    const target_content = try testRead(alloc, child_target);
+    defer alloc.free(target_content);
+    try std.testing.expectEqualStrings("target content\n", target_content);
 }

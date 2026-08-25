@@ -759,6 +759,37 @@ describe("gateway stream lifecycle", () => {
     }
   }, 30_000);
 
+  test("replay-safe empty stops retry before returning visible output", async () => {
+    const root = createFixtureRoot("empty-stop-retry");
+    const tracePath = join(root.root, "trace.log");
+    let attempt = 0;
+    const gateway = startDynamicFakeGateway(() => {
+      attempt += 1;
+      if (attempt === 1) return fakeGatewayFinalText("");
+      if (attempt === 2) return fakeGatewayFinalText("   ");
+      return fakeGatewayFinalText("EMPTY_RETRY_COMPLETE");
+    });
+
+    try {
+      const result = await runFx(
+        ["ask", "--json", "--auto", "--no-save", "return the fixture response"],
+        {
+          cwd: root.workspace,
+          env: fixtureEnv(root, gateway, tracePath),
+          timeoutMs: 30_000,
+        },
+      );
+
+      expect(result.code).toBe(0);
+      expect(parseAskJson(result.stdout).output).toContain("EMPTY_RETRY_COMPLETE");
+      expect(gateway.requests).toHaveLength(3);
+      expect(readFileSync(tracePath, "utf8").match(/empty_completion_retry/g)).toHaveLength(2);
+    } finally {
+      gateway.stop();
+      rmSync(root.root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
   test("quota-limited Gateway credential rotates before retry delay", async () => {
     const root = createFixtureRoot("credential-rotation");
     writeFileSync(

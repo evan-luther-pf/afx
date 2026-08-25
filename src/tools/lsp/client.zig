@@ -54,6 +54,11 @@ const OpenFile = struct {
     content_len: usize,
 };
 
+const StoredDiagnostic = struct {
+    json: []u8,
+    version: ?usize = null,
+};
+
 const OwnedServer = struct {
     name: []u8,
     argv: [][]u8,
@@ -122,7 +127,7 @@ const Client = struct {
     state_mutex: std.Io.Mutex = .init,
     document_mutex: std.Io.Mutex = .init,
     open_files: std.StringHashMapUnmanaged(OpenFile) = .empty,
-    diagnostics: std.StringHashMapUnmanaged([]u8) = .empty,
+    diagnostics: std.StringHashMapUnmanaged(StoredDiagnostic) = .empty,
     capabilities_json: []u8,
     started_at_ms: i64,
     last_activity_ms: i64,
@@ -435,7 +440,7 @@ pub fn waitForDiagnostics(
         if (cancelRequested(ctx.cancel_flag)) return error.Cancelled;
         client.state_mutex.lockUncancelable(io_mod.getIo());
         if (client.diagnostics.get(uri)) |raw| {
-            const result = try ctx.allocator.dupe(u8, raw);
+            const result = try ctx.allocator.dupe(u8, raw.json);
             client.state_mutex.unlock(io_mod.getIo());
             return result;
         }
@@ -800,7 +805,7 @@ fn sendDidSave(alloc: Allocator, client: *Client, document: Document) !void {
 fn copyDiagnostic(alloc: Allocator, client: *Client, uri: []const u8) !?[]u8 {
     client.state_mutex.lockUncancelable(io_mod.getIo());
     defer client.state_mutex.unlock(io_mod.getIo());
-    return if (client.diagnostics.get(uri)) |raw| try alloc.dupe(u8, raw) else null;
+    return if (client.diagnostics.get(uri)) |raw| try alloc.dupe(u8, raw.json) else null;
 }
 
 fn onNotification(raw_client: *anyopaque, value: std.json.Value) void {
@@ -813,10 +818,14 @@ fn onNotification(raw_client: *anyopaque, value: std.json.Value) void {
         if (params != .object) return;
         const uri = params.object.get("uri") orelse return;
         if (uri != .string) return;
+        const version: ?usize = if (params.object.get("version")) |ver_val| switch (ver_val) {
+            .integer => |n| if (n >= 0) @intCast(n) else null,
+            else => null,
+        } else null;
         var encoded: std.Io.Writer.Allocating = .init(persistent_alloc);
         defer encoded.deinit();
         std.json.Stringify.value(value, .{}, &encoded.writer) catch return;
-        storeDiagnostic(client, uri.string, encoded.written()) catch return;
+        storeDiagnostic(client, uri.string, version, encoded.written()) catch return;
     } else if (std.mem.eql(u8, method.string, "$/progress")) {
         const params = value.object.get("params") orelse return;
         if (params != .object) return;
@@ -902,12 +911,26 @@ fn handleServerRequest(raw_context: *anyopaque, alloc: Allocator, frame: []const
     try client.dispatcher.sendNotification(response.written(), 1_000);
 }
 
-fn storeDiagnostic(client: *Client, uri: []const u8, frame: []const u8) !void {
+fn storeDiagnostic(client: *Client, uri: []const u8, version: ?usize, frame: []const u8) !void {
     client.state_mutex.lockUncancelable(io_mod.getIo());
     defer client.state_mutex.unlock(io_mod.getIo());
+    if (client.open_files.get(uri)) |open_file| {
+        if (version) |ver| {
+            if (ver < open_file.version) return;
+        }
+    }
     if (client.diagnostics.getEntry(uri)) |entry| {
-        persistent_alloc.free(entry.value_ptr.*);
-        entry.value_ptr.* = try persistent_alloc.dupe(u8, frame);
+        if (version) |incoming| {
+            if (entry.value_ptr.version) |stored| {
+                if (incoming < stored) return;
+            }
+        }
+        const new_json = try persistent_alloc.dupe(u8, frame);
+        persistent_alloc.free(entry.value_ptr.json);
+        entry.value_ptr.* = .{
+            .json = new_json,
+            .version = version,
+        };
         client.diagnostics_changed.set(io_mod.getIo());
         return;
     }
@@ -915,14 +938,17 @@ fn storeDiagnostic(client: *Client, uri: []const u8, frame: []const u8) !void {
     errdefer persistent_alloc.free(key);
     const body = try persistent_alloc.dupe(u8, frame);
     errdefer persistent_alloc.free(body);
-    try client.diagnostics.put(persistent_alloc, key, body);
+    try client.diagnostics.put(persistent_alloc, key, .{
+        .json = body,
+        .version = version,
+    });
     client.diagnostics_changed.set(io_mod.getIo());
 }
 
 fn removeDiagnosticLocked(client: *Client, uri: []const u8) void {
     const entry = client.diagnostics.fetchRemove(uri) orelse return;
     persistent_alloc.free(entry.key);
-    persistent_alloc.free(entry.value);
+    persistent_alloc.free(entry.value.json);
 }
 
 fn storeCapabilities(client: *Client, response_json: []const u8) !void {
@@ -973,7 +999,7 @@ fn destroyClient(client: *Client, graceful: bool) void {
     var diagnostic_iterator = client.diagnostics.iterator();
     while (diagnostic_iterator.next()) |entry| {
         persistent_alloc.free(entry.key_ptr.*);
-        persistent_alloc.free(entry.value_ptr.*);
+        persistent_alloc.free(entry.value_ptr.json);
     }
     client.diagnostics.deinit(persistent_alloc);
     persistent_alloc.free(client.capabilities_json);
@@ -1112,4 +1138,144 @@ fn clientCapabilitiesJson() []const u8 {
         "\"symbol\":{}," ++
         "\"fileOperations\":{\"willRename\":true,\"didRename\":true}" ++
         "},\"window\":{\"workDoneProgress\":true}}";
+}
+
+test "LSP diagnostics freshness ignores stale versions and accepts current or unversioned" {
+    const alloc = std.testing.allocator;
+    var client: Client = .{
+        .key = try persistent_alloc.dupe(u8, "test\x00/workspace"),
+        .workspace = try persistent_alloc.dupe(u8, "/workspace"),
+        .server = .{
+            .name = try persistent_alloc.dupe(u8, "test"),
+            .argv = try persistent_alloc.alloc([]u8, 0),
+            .argv_view = try persistent_alloc.alloc([]const u8, 0),
+            .language_id = try persistent_alloc.dupe(u8, "zig"),
+            .initialization_options_json = try persistent_alloc.dupe(u8, "{}"),
+            .settings_json = try persistent_alloc.dupe(u8, "{}"),
+            .project_aware = true,
+            .idle_timeout_ms = null,
+        },
+        .dispatcher = undefined,
+        .capabilities_json = try persistent_alloc.dupe(u8, "{}"),
+        .started_at_ms = io_mod.milliTimestamp(),
+        .last_activity_ms = io_mod.milliTimestamp(),
+    };
+    defer {
+        persistent_alloc.free(client.key);
+        persistent_alloc.free(client.workspace);
+        client.server.deinit();
+        persistent_alloc.free(client.capabilities_json);
+        var open_it = client.open_files.keyIterator();
+        while (open_it.next()) |k| persistent_alloc.free(k.*);
+        client.open_files.deinit(persistent_alloc);
+        var diag_it = client.diagnostics.iterator();
+        while (diag_it.next()) |entry| {
+            persistent_alloc.free(entry.key_ptr.*);
+            persistent_alloc.free(entry.value_ptr.json);
+        }
+        client.diagnostics.deinit(persistent_alloc);
+    }
+
+    const uri = "file:///workspace/test.zig";
+    const file_key = try persistent_alloc.dupe(u8, uri);
+    try client.open_files.put(persistent_alloc, file_key, .{
+        .version = 2,
+        .content_hash = 1234,
+        .content_len = 100,
+    });
+
+    // 1. Stale version 1 notification should be ignored (cache empty -> stays empty)
+    {
+        const json = "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/publishDiagnostics\",\"params\":{\"uri\":\"file:///workspace/test.zig\",\"version\":1,\"diagnostics\":[{\"message\":\"stale v1\"}]}}";
+        var parsed = try std.json.parseFromSlice(std.json.Value, alloc, json, .{});
+        defer parsed.deinit();
+        onNotification(&client, parsed.value);
+
+        const diag = try copyDiagnostic(alloc, &client, uri);
+        try std.testing.expect(diag == null);
+        try std.testing.expect(!client.diagnostics.contains(uri));
+    }
+
+    // 2. Unversioned notification should be accepted
+    {
+        const json = "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/publishDiagnostics\",\"params\":{\"uri\":\"file:///workspace/test.zig\",\"diagnostics\":[{\"message\":\"unversioned diag\"}]}}";
+        var parsed = try std.json.parseFromSlice(std.json.Value, alloc, json, .{});
+        defer parsed.deinit();
+        onNotification(&client, parsed.value);
+
+        const diag = try copyDiagnostic(alloc, &client, uri);
+        try std.testing.expect(diag != null);
+        defer alloc.free(diag.?);
+        try std.testing.expect(std.mem.find(u8, diag.?, "unversioned diag") != null);
+        const stored = client.diagnostics.get(uri).?;
+        try std.testing.expect(stored.version == null);
+    }
+
+    // 3. Stale version 1 notification should not overwrite the existing unversioned cache
+    {
+        const json = "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/publishDiagnostics\",\"params\":{\"uri\":\"file:///workspace/test.zig\",\"version\":1,\"diagnostics\":[{\"message\":\"stale v1 overwrite attempt\"}]}}";
+        var parsed = try std.json.parseFromSlice(std.json.Value, alloc, json, .{});
+        defer parsed.deinit();
+        onNotification(&client, parsed.value);
+
+        const diag = try copyDiagnostic(alloc, &client, uri);
+        try std.testing.expect(diag != null);
+        defer alloc.free(diag.?);
+        try std.testing.expect(std.mem.find(u8, diag.?, "unversioned diag") != null);
+        try std.testing.expect(std.mem.find(u8, diag.?, "stale v1 overwrite attempt") == null);
+    }
+
+    // 4. Current version 2 notification should overwrite cache
+    {
+        const json = "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/publishDiagnostics\",\"params\":{\"uri\":\"file:///workspace/test.zig\",\"version\":2,\"diagnostics\":[{\"message\":\"current v2\"}]}}";
+        var parsed = try std.json.parseFromSlice(std.json.Value, alloc, json, .{});
+        defer parsed.deinit();
+        onNotification(&client, parsed.value);
+
+        const diag = try copyDiagnostic(alloc, &client, uri);
+        try std.testing.expect(diag != null);
+        defer alloc.free(diag.?);
+        try std.testing.expect(std.mem.find(u8, diag.?, "current v2") != null);
+        const stored = client.diagnostics.get(uri).?;
+        try std.testing.expectEqual(@as(?usize, 2), stored.version);
+    }
+
+    // 5. Newer version 3 notification should overwrite cache
+    {
+        const json = "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/publishDiagnostics\",\"params\":{\"uri\":\"file:///workspace/test.zig\",\"version\":3,\"diagnostics\":[{\"message\":\"newer v3\"}]}}";
+        var parsed = try std.json.parseFromSlice(std.json.Value, alloc, json, .{});
+        defer parsed.deinit();
+        onNotification(&client, parsed.value);
+
+        const diag = try copyDiagnostic(alloc, &client, uri);
+        try std.testing.expect(diag != null);
+        defer alloc.free(diag.?);
+        try std.testing.expect(std.mem.find(u8, diag.?, "newer v3") != null);
+        const stored = client.diagnostics.get(uri).?;
+        try std.testing.expectEqual(@as(?usize, 3), stored.version);
+    }
+
+    // 6. An older version must not replace a newer cached diagnostic.
+    {
+        const json = "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/publishDiagnostics\",\"params\":{\"uri\":\"file:///workspace/test.zig\",\"version\":2,\"diagnostics\":[{\"message\":\"late v2\"}]}}";
+        var parsed = try std.json.parseFromSlice(std.json.Value, alloc, json, .{});
+        defer parsed.deinit();
+        onNotification(&client, parsed.value);
+
+        const diag = try copyDiagnostic(alloc, &client, uri);
+        defer alloc.free(diag.?);
+        try std.testing.expect(std.mem.find(u8, diag.?, "newer v3") != null);
+        try std.testing.expect(std.mem.find(u8, diag.?, "late v2") == null);
+    }
+
+    // 7. removeDiagnosticLocked clears the cache and allows freeing.
+    {
+        client.state_mutex.lockUncancelable(io_mod.getIo());
+        removeDiagnosticLocked(&client, uri);
+        client.state_mutex.unlock(io_mod.getIo());
+
+        const diag = try copyDiagnostic(alloc, &client, uri);
+        try std.testing.expect(diag == null);
+        try std.testing.expect(!client.diagnostics.contains(uri));
+    }
 }

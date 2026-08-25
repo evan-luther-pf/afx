@@ -1,14 +1,25 @@
 # afx
 
-## 0.0.9
+## 0.0.10
 
 <!-- release:start -->
+
+### Improvements
+
+- **Empty response recovery:** Retry replay-safe empty and whitespace-only model stops twice before accepting an empty reply
+
+### Bug Fixes
+
+- **LSP diagnostic freshness:** Ignore versioned diagnostic notifications older than the active document or newer cached result
+- **Isolated symlinks:** Preserve untracked symbolic links in isolated task worktrees without following or copying their targets
+
+<!-- release:end -->
+
+## 0.0.9
 
 ### Bug Fixes
 
 - **Safe workspace undo:** Refuse undo when a file preimage or rename record is incomplete, preserve recorded targets during rollback, and report operations that could not be reversed instead of risking data loss
-
-<!-- release:end -->
 
 ## 0.0.8
 

@@ -1190,6 +1190,31 @@ fn streamReplaySafe(
     return stream_ctx.raw_text.items.len == 0 and !stream_ctx.saw_tool_start;
 }
 
+const max_empty_completion_replay_attempts: usize = 2;
+
+fn emptyCompletionReplayEligible(
+    status: std.http.Status,
+    completion: types.GatewayCompletion,
+    stream_ctx: *const runtime_assistant_stream.StreamChunkContext,
+    partial_assistant: []const u8,
+    empty_replay_count: usize,
+    semantic_attempt: usize,
+    semantic_limit: usize,
+    has_completed_tools: bool,
+    cancelled: bool,
+) bool {
+    if (has_completed_tools) return false;
+    if (cancelled) return false;
+    if (status != .ok) return false;
+    if (completion.finish_reason == null or completion.finish_reason.? != .stop) return false;
+    if (completion.tool_calls.len > 0 or stream_ctx.saw_tool_start or stream_ctx.saw_provider_tool_start) return false;
+    if (stream_ctx.saw_visible_text or std.mem.trim(u8, partial_assistant, " \t\r\n").len > 0) return false;
+    if (std.mem.trim(u8, stream_ctx.raw_text.items, " \t\r\n").len > 0) return false;
+    if (empty_replay_count >= max_empty_completion_replay_attempts) return false;
+    if (semantic_attempt + 1 >= semantic_limit) return false;
+    return true;
+}
+
 const read_failure_tool_recovery_instruction =
     \\<network_recovery>
     \\The previous response stream ended because the network connection was interrupted.
@@ -3038,6 +3063,7 @@ fn processQueuedPromptLoop(
         var skip_next_preflight_refresh = false;
         var recovery_has_unexecuted_tool_start = false;
         var successful_recovery_strategy: ?model_response_recovery.Strategy = null;
+        var empty_completion_retries: usize = 0;
         defer {
             if (recovery_has_unexecuted_tool_start) {
                 const settlement = if (config.cancel_flag.load(.seq_cst))
@@ -4374,6 +4400,33 @@ fn processQueuedPromptLoop(
                 }
                 finish_trace.finish(if (finish_reason == .provider_error) "provider_error" else "content_filter");
                 return error.ModelError;
+            }
+            if (emptyCompletionReplayEligible(
+                stream_result.status,
+                attempt_completion,
+                &stream_ctx,
+                partial_assistant,
+                empty_completion_retries,
+                semantic_attempt,
+                semantic_limit,
+                completed_tool_names.items.len > 0,
+                config.cancel_flag.load(.seq_cst),
+            )) {
+                debug_trace.eventf(
+                    "gateway",
+                    "empty_completion_retry",
+                    step_ctx,
+                    "semantic_attempt={d}/{d} retry_count={d}",
+                    .{ semantic_attempt + 1, semantic_limit, empty_completion_retries + 1 },
+                );
+                empty_completion_retries += 1;
+                if (stream_result.err_body) |body| mem_utils.free(arena, body);
+                stream_result.err_body = null;
+                stream_result_set = false;
+                semantic_attempt += 1;
+                retry_pacing = .idle;
+                reset_stream_for_next_attempt = true;
+                continue;
             }
 
             successful_request_messages = request_messages;

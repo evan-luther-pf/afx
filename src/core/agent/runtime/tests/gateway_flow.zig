@@ -4008,6 +4008,83 @@ test "processQueuedPrompt retries replay-safe provider errors before success" {
     try expectRouteStatus(&hooks, 2, .auto_recovered, "✓ recovered · succeeded on attempt 3/3");
 }
 
+test "processQueuedPrompt retries replay-safe empty stop completions to visible content" {
+    const alloc = std.testing.allocator;
+    const final_chunks = [_][]const u8{"Visible answer"};
+    const whitespace_chunks = [_][]const u8{"   "};
+    const completions = [_]FakeCompletion{
+        .{ .finish_reason = .stop, .content = "" },
+        .{ .chunks = &whitespace_chunks, .finish_reason = .stop, .content = "   " },
+        .{ .chunks = &final_chunks, .content = "Visible answer" },
+    };
+    var gateway = FakeGateway.init(alloc, &completions);
+    defer gateway.deinit();
+    var hooks = FakeAgentRuntimeDeps.init(alloc);
+    defer hooks.deinit();
+    var fixture = PromptFixture{};
+    var config = fixture.config();
+    config.max_provider_attempts = 5;
+
+    try runFakePrompt(&gateway, &hooks, config, fixture.job());
+
+    try std.testing.expectEqual(@as(usize, 3), gateway.request_models.items.len);
+    try std.testing.expectEqual(@as(usize, 1), countText(&hooks, "Visible answer"));
+    try std.testing.expectEqualStrings("Visible answer", hooks.finish_assistant_text.?);
+}
+
+test "processQueuedPrompt bounds empty stop completion retries" {
+    const alloc = std.testing.allocator;
+    const completions = [_]FakeCompletion{
+        .{ .finish_reason = .stop },
+        .{ .finish_reason = .stop },
+        .{ .finish_reason = .stop },
+        .{ .content = "must not send" },
+    };
+    var gateway = FakeGateway.init(alloc, &completions);
+    defer gateway.deinit();
+    var hooks = FakeAgentRuntimeDeps.init(alloc);
+    defer hooks.deinit();
+    var fixture = PromptFixture{};
+    var config = fixture.config();
+    config.max_provider_attempts = 5;
+
+    try runFakePrompt(&gateway, &hooks, config, fixture.job());
+
+    try std.testing.expectEqual(@as(usize, 3), gateway.request_models.items.len);
+    try std.testing.expectEqualStrings("Done.", hooks.finish_assistant_text.?);
+}
+
+test "processQueuedPrompt does not retry visible stops and preserves tool continuation" {
+    const alloc = std.testing.allocator;
+    const visible_chunks = [_][]const u8{"Partial visible text"};
+    const completions_visible = [_]FakeCompletion{
+        .{ .chunks = &visible_chunks, .finish_reason = .stop },
+        .{ .content = "must not send" },
+    };
+    var gateway_visible = FakeGateway.init(alloc, &completions_visible);
+    defer gateway_visible.deinit();
+    var hooks_visible = FakeAgentRuntimeDeps.init(alloc);
+    defer hooks_visible.deinit();
+    var fixture_visible = PromptFixture{};
+
+    try runFakePrompt(&gateway_visible, &hooks_visible, fixture_visible.config(), fixture_visible.job());
+    try std.testing.expectEqual(@as(usize, 1), gateway_visible.request_models.items.len);
+
+    const calls = [_]ToolCall{toolCall("call_1", "read_file", "{\"path\":\"README.md\"}")};
+    const completions_tool = [_]FakeCompletion{
+        .{ .tool_calls = &calls, .finish_reason = .tool_calls },
+        .{ .content = "Final response after tool" },
+    };
+    var gateway_tool = FakeGateway.init(alloc, &completions_tool);
+    defer gateway_tool.deinit();
+    var hooks_tool = FakeAgentRuntimeDeps.init(alloc);
+    defer hooks_tool.deinit();
+    var fixture_tool = PromptFixture{};
+
+    try runFakePrompt(&gateway_tool, &hooks_tool, fixture_tool.config(), fixture_tool.job());
+    try std.testing.expectEqual(@as(usize, 2), gateway_tool.request_models.items.len);
+}
+
 test "processQueuedPrompt rotates a replay-safe quota-limited gateway credential" {
     const alloc = std.testing.allocator;
     const completions = [_]FakeCompletion{
