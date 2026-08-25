@@ -5849,7 +5849,8 @@ describe("acp: model-independent", () => {
         expect(skillSchema?.inputSchema.type).toBe("object");
         expect(skillSchema?.inputSchema.properties.name.type).toBe("string");
         expect(skillSchema?.inputSchema.properties.location.type).toBe("string");
-        expect(skillSchema?.inputSchema.required).toEqual(["name"]);
+        expect(skillSchema?.inputSchema.properties.i.type).toBe("string");
+        expect(skillSchema?.inputSchema.required).toEqual(["i", "name"]);
 
         const diagnosticNotices = result.messages.filter((message: any) =>
           message.method === "session/update" &&
