@@ -2,6 +2,7 @@ const std = @import("std");
 const glob_pattern = @import("../../core/workspace/glob_pattern.zig");
 const grep_search = @import("../../core/workspace/grep_search.zig");
 const io_mod = @import("../../core/shared/io.zig");
+const read_tracker = @import("../../core/workspace/read_tracker.zig");
 const pathing = @import("../../core/workspace/pathing.zig");
 const text_utils = @import("../../core/shared/text_utils.zig");
 const tool_dispatch = @import("../../core/tooling/tool_dispatch.zig");
@@ -246,7 +247,7 @@ fn callWithOps(ctx: tool_dispatch.DispatchContext, erased: tool_dispatch.ToolInp
         .failure => |body| .{ .failure = body },
         .count => |count_result| .{ .success = try formatCount(ctx.allocator, input.pattern, count_result) },
         .matches => |search_result| switch (input.mode) {
-            .matches => .{ .success = try formatMatches(ctx.allocator, arena, ctx.workspace_root, input.pattern, search_result, input.head_limit, input.offset, input.context_lines, ctx.max_list_entries, ctx.max_read_file_line_len) },
+            .matches => .{ .success = try formatMatches(ctx.allocator, arena, ctx.workspace_root, input.pattern, search_result, input.head_limit, input.offset, input.context_lines, ctx.max_list_entries, ctx.max_read_file_line_len, ctx.read_tracker) },
             .files_with_matches => .{ .success = try formatFilesWithMatches(ctx.allocator, arena, ctx.workspace_root, input.pattern, search_result, input.head_limit, input.offset, ctx.max_list_entries) },
             .count => unreachable,
         },
@@ -311,12 +312,20 @@ fn formatMatches(
     context_lines: usize,
     max_list_entries: usize,
     max_read_file_line_len: usize,
+    tracker: ?*read_tracker.ReadTracker,
 ) tool_dispatch.DispatchError![]u8 {
     const matches = result.matches;
     const effective_limit = @min(head_limit, max_list_entries);
     const start = @min(offset, matches.len);
     const end = @min(start + effective_limit, matches.len);
     const emitted = end - start;
+    var snapshot_tags = std.StringHashMap(read_tracker.HashlineTag).init(arena);
+    defer snapshot_tags.deinit();
+    if (tracker) |active_tracker| {
+        recordMatchSnapshots(arena, active_tracker, matches[start..end], context_lines, &snapshot_tags) catch |err| {
+            if (err == error.OutOfMemory) return error.OutOfMemory;
+        };
+    }
 
     var out: std.Io.Writer.Allocating = .init(alloc);
     defer out.deinit();
@@ -331,12 +340,19 @@ fn formatMatches(
         } else {
             out.writer.print("[grep] {d} matches for {s} (showing {d}-{d} of {d})\n", .{ emitted, pattern, start + 1, end, matches.len }) catch return error.OutOfMemory;
         }
+        var previous_path: ?[]const u8 = null;
         for (matches[start..end]) |match| {
             const display_path = displayPath(arena, workspace_root, match.absolute_path) catch |err| fallback: {
                 if (err == error.OutOfMemory) return error.OutOfMemory;
                 break :fallback match.absolute_path;
             };
-            writeMatchWithContext(arena, &out.writer, match, display_path, context_lines, max_read_file_line_len) catch return error.OutOfMemory;
+            const tag = snapshot_tags.get(match.absolute_path);
+            const hashline = tag != null;
+            if (hashline and (previous_path == null or !std.mem.eql(u8, previous_path.?, match.absolute_path))) {
+                out.writer.print("[{s}#{s}]\n", .{ display_path, tag.?[0..] }) catch return error.OutOfMemory;
+            }
+            writeMatchWithContext(arena, &out.writer, match, display_path, context_lines, max_read_file_line_len, hashline) catch return error.OutOfMemory;
+            previous_path = match.absolute_path;
         }
     }
 
@@ -355,15 +371,16 @@ fn writeMatchWithContext(
     display_path: []const u8,
     context_lines: usize,
     max_read_file_line_len: usize,
+    hashline: bool,
 ) !void {
     const content = if (context_lines > 0) try readContextContent(arena, match.absolute_path) else null;
     if (content) |text| {
         const first_line = if (match.line_number > context_lines) match.line_number - context_lines else 1;
-        try writeContextRange(writer, display_path, text, first_line, match.line_number, max_read_file_line_len);
+        try writeContextRange(writer, display_path, text, first_line, match.line_number, max_read_file_line_len, hashline);
     }
-    try writeMatchLine(writer, display_path, match, max_read_file_line_len);
+    try writeMatchLine(writer, display_path, match, max_read_file_line_len, hashline);
     if (content) |text| {
-        try writeContextRange(writer, display_path, text, match.line_number + 1, match.line_number + context_lines + 1, max_read_file_line_len);
+        try writeContextRange(writer, display_path, text, match.line_number + 1, match.line_number + context_lines + 1, max_read_file_line_len, hashline);
     }
 }
 
@@ -383,13 +400,14 @@ fn writeContextRange(
     start_line: usize,
     end_line_exclusive: usize,
     max_read_file_line_len: usize,
+    hashline: bool,
 ) !void {
     var line_number: usize = 1;
     var cursor: usize = 0;
     while (nextRealLine(content, &cursor)) |line| : (line_number += 1) {
         if (line_number < start_line) continue;
         if (line_number >= end_line_exclusive) break;
-        try writer.print("   {s}:{d}- ", .{ display_path, line_number });
+        if (hashline) try writer.print(" {d}:", .{line_number}) else try writer.print("   {s}:{d}- ", .{ display_path, line_number });
         try writeClippedLine(writer, line, max_read_file_line_len);
     }
 }
@@ -413,8 +431,9 @@ fn writeMatchLine(
     display_path: []const u8,
     match: grep_search.Match,
     max_read_file_line_len: usize,
+    hashline: bool,
 ) !void {
-    try writer.print(" - {s}:{d}: ", .{ display_path, match.line_number });
+    if (hashline) try writer.print("*{d}:", .{match.line_number}) else try writer.print(" - {s}:{d}: ", .{ display_path, match.line_number });
     try writeClippedLine(writer, match.line, max_read_file_line_len);
 }
 
@@ -425,6 +444,43 @@ fn writeClippedLine(writer: *std.Io.Writer, line: []const u8, max_read_file_line
         try writer.writeAll("...");
     }
     try writer.writeByte('\n');
+}
+
+fn recordMatchSnapshots(
+    arena: Allocator,
+    tracker: *read_tracker.ReadTracker,
+    matches: []const grep_search.Match,
+    context_lines: usize,
+    tags: *std.StringHashMap(read_tracker.HashlineTag),
+) !void {
+    var index: usize = 0;
+    while (index < matches.len) : (index += 1) {
+        const path = matches[index].absolute_path;
+        if (tags.contains(path)) continue;
+        var file = io_mod.openExistingReadOnlyRegularFile(std.Io.Dir.cwd(), path, .no_follow) catch continue;
+        defer file.close(io_mod.getIo());
+        const stat = file.stat(io_mod.getIo()) catch continue;
+        if (stat.size > 10 * 1024 * 1024) continue;
+        const content = io_mod.readFileToEnd(arena, &file, 10 * 1024 * 1024) catch continue;
+        if (!text_utils.isModelSafeText(content)) continue;
+        var seen: std.ArrayList(usize) = .empty;
+        defer seen.deinit(arena);
+        for (matches) |match| {
+            if (!std.mem.eql(u8, match.absolute_path, path)) continue;
+            const first = if (match.line_number > context_lines) match.line_number - context_lines else 1;
+            const last = match.line_number + context_lines;
+            for (first..last + 1) |line| {
+                if (std.mem.indexOfScalar(usize, seen.items, line) == null) try seen.append(arena, line);
+            }
+        }
+        const tag = try tracker.recordSnapshot(path, .{
+            .mtime_ns = stat.mtime.nanoseconds,
+            .content_hash = read_tracker.contentHash(content),
+            .model_view_covers_full_file = false,
+            .snapshot_covers_full_file = true,
+        }, content, seen.items);
+        try tags.put(path, tag);
+    }
 }
 
 fn formatFilesWithMatches(
@@ -1303,6 +1359,49 @@ test "grep_files context_lines does not affect files_with_matches or count modes
     try std.testing.expectEqualStrings("[grep] count 1 matching lines in 1 files for needle\n", count_result.body);
 }
 
+test "grep match output records hashline snapshots and seen context" {
+    const alloc = std.testing.allocator;
+    var arena_state = std.heap.ArenaAllocator.init(alloc);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const workspace = try workspaceRoot(alloc, tmp);
+    defer alloc.free(workspace);
+    const path = try writeTempFile(alloc, &tmp, "hashline.txt", "before\nneedle\nafter\n");
+    defer alloc.free(path);
+    const matches = [_]grep_search.Match{.{
+        .absolute_path = path,
+        .line_number = 2,
+        .line = "needle",
+    }};
+    var tracker = read_tracker.ReadTracker.init(alloc);
+    defer tracker.deinit();
+    const body = try formatMatches(
+        alloc,
+        arena,
+        workspace,
+        "needle",
+        .{ .matches = &matches },
+        10,
+        0,
+        1,
+        10,
+        2000,
+        &tracker,
+    );
+    defer alloc.free(body);
+    try std.testing.expect(std.mem.find(u8, body, "[hashline.txt#") != null);
+    try std.testing.expect(std.mem.find(u8, body, " 1:before") != null);
+    try std.testing.expect(std.mem.find(u8, body, "*2:needle") != null);
+    try std.testing.expect(std.mem.find(u8, body, " 3:after") != null);
+    const record = tracker.lookup(path).?;
+    const snapshot = tracker.snapshotByTag(path, record.hashline_tag).?;
+    try std.testing.expect(snapshot.lineSeen(1));
+    try std.testing.expect(snapshot.lineSeen(2));
+    try std.testing.expect(snapshot.lineSeen(3));
+}
+
 test "grep_files files_with_matches mode returns unique paginated paths" {
     const alloc = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
@@ -1329,7 +1428,7 @@ test "grep_files formatter uses active pagination cap" {
     const matches = try matchingLines(alloc, 3);
     defer alloc.free(matches);
 
-    const body = try formatMatches(alloc, alloc, "", "needle", .{ .matches = matches }, 2, 0, 0, 2, 2000);
+    const body = try formatMatches(alloc, alloc, "", "needle", .{ .matches = matches }, 2, 0, 0, 2, 2000, null);
     defer alloc.free(body);
 
     try std.testing.expectEqualStrings(
@@ -1346,7 +1445,7 @@ test "grep_files formatter does not report output truncation for exactly active 
     const matches = try matchingLines(alloc, tool_dispatch.default_max_list_entries);
     defer alloc.free(matches);
 
-    const body = try formatMatches(alloc, alloc, "", "needle", .{ .matches = matches }, output_cap, 0, 0, tool_dispatch.default_max_list_entries, 2000);
+    const body = try formatMatches(alloc, alloc, "", "needle", .{ .matches = matches }, output_cap, 0, 0, tool_dispatch.default_max_list_entries, 2000, null);
     defer alloc.free(body);
 
     try std.testing.expect(std.mem.startsWith(u8, body, "[grep] 100 matches for needle\n"));
@@ -1359,7 +1458,7 @@ test "grep_files formatter reports active truncation when cap hides matches" {
     const matches = try matchingLines(alloc, tool_dispatch.default_max_list_entries + 1);
     defer alloc.free(matches);
 
-    const body = try formatMatches(alloc, alloc, "", "needle", .{ .matches = matches }, output_cap, 0, 0, tool_dispatch.default_max_list_entries, 2000);
+    const body = try formatMatches(alloc, alloc, "", "needle", .{ .matches = matches }, output_cap, 0, 0, tool_dispatch.default_max_list_entries, 2000, null);
     defer alloc.free(body);
 
     try std.testing.expect(std.mem.startsWith(u8, body, "[grep] 100 matches for needle (showing 1-100 of 101)\n"));
@@ -1375,7 +1474,7 @@ test "grep_files formatter reports collection cap separately from output truncat
     const body = try formatMatches(alloc, alloc, "", "needle", .{
         .matches = matches,
         .truncated_reason = .collection_cap,
-    }, output_cap, 0, 0, tool_dispatch.default_max_list_entries, 2000);
+    }, output_cap, 0, 0, tool_dispatch.default_max_list_entries, 2000, null);
     defer alloc.free(body);
 
     try std.testing.expect(std.mem.startsWith(u8, body, "[grep] 100 matches for needle (showing 1-100 of 2000)\n"));
@@ -1415,7 +1514,7 @@ test "grep_files formatter reports candidate cap without output truncation wordi
         .matches = &.{},
         .candidate_incomplete = true,
         .candidate_cap = 2,
-    }, output_cap, 0, 0, tool_dispatch.default_max_list_entries, 2000);
+    }, output_cap, 0, 0, tool_dispatch.default_max_list_entries, 2000, null);
     defer alloc.free(body);
 
     try std.testing.expectEqualStrings("[grep] no matches for needle\n... candidate list may be incomplete; candidate cap 2 reached before all files were discovered\n", body);

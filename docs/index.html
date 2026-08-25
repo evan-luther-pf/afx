@@ -16,7 +16,7 @@ reads and edits repositories, runs programs, searches the web, talks to model
 providers, uses language servers and debuggers, and delegates bounded work to
 focused task agents.</p>
 
-<p>Development release 0.0.5. macOS and Linux, Zig 0.16, Apache-2.0 licensed.</p>
+<p>Development release 0.0.6. macOS and Linux, Zig 0.16, Apache-2.0 licensed.</p>
 
 <h2>Documents</h2>
 
@@ -65,6 +65,7 @@ focused task agents.</p>
 <li>One native <code>afx</code> binary with no application framework.</li>
 <li>Compact terminal scrollback with bounded OMP-style cards for commands,
 edits, searches, tasks, and debugger work.</li>
+<li>Snapshot-bound hashline edits reject stale, unseen, overlapping, or ambiguous anchors before disk mutation.</li>
 <li>Saved sessions, plans, checkpoints, todos, branches, and child-agent state.</li>
 <li>Stable and development updates served only from GitHub Releases.</li>
 </ul>

@@ -49,6 +49,7 @@ Configuration:
 
 Capabilities:
 - Local file inspection and mutation
+- Snapshot-bound hashline editing with original line anchors, syntax blocks, multi-file preflight, stale recovery, clipboard registers, moves, and removal
 - Captured commands and persistent terminal sessions
 - LSP definitions, references, diagnostics, symbols, code actions, and renames
 - DAP debugger sessions

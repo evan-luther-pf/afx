@@ -902,6 +902,7 @@ fn typedDispatchContext(ctx: Context, arena: Allocator) tool_dispatch.DispatchCo
         .subagent_depth = ctx.subagent_depth,
         .subagent_max_depth = ctx.subagent_max_depth,
         .change_tracker = ctx.tracker,
+        .read_tracker = &ctx.session.read_tracker,
         .skills_dir = ctx.skills_dir,
         .context_limits = ctx.context_limits,
         .ignored_list_entries = ctx.ignored_list_entries,
@@ -6027,7 +6028,8 @@ test "executeToolCall preserves explicit ignored directory grep roots" {
     });
 
     try std.testing.expectEqual(tool_contracts.ToolExecutionStatus.success, result.status);
-    try expectContains(result.model_output, "node_modules/pkg/index.js:1: needle module");
+    try expectContains(result.model_output, "[node_modules/pkg/index.js#");
+    try expectContains(result.model_output, "*1:needle module");
 }
 
 test "request tool permission checks copy and rename destinations" {

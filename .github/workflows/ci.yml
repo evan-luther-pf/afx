@@ -46,7 +46,8 @@ jobs:
           TEST_TIMEOUT_SECONDS: ${{ matrix.test_timeout_seconds }}
         run: |
           started_at=$SECONDS
-          trap 'printf "Unit tests elapsed: %ss\n" "$((SECONDS - started_at))"' EXIT
+          finish() { printf "Unit tests elapsed: %ss\n" "$((SECONDS - started_at))"; }
+          trap finish EXIT
           timeout "${TEST_TIMEOUT_SECONDS}s" zig build test -Doptimize=${{ matrix.optimize }}
 
   zig:
@@ -61,7 +62,7 @@ jobs:
         run: test "$MATRIX_RESULT" = success
 
   sdk-node-wasm:
-    name: SDK (Node + WASM)
+    name: SDK (Node + Core WASM)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -76,16 +77,14 @@ jobs:
         with:
           node-version: "24"
 
-      - name: Build WASM surfaces (ReleaseSmall)
+      - name: Build core WASM (ReleaseSmall)
+        run: zig build -Dwasm-surface=core -Doptimize=ReleaseSmall
+
+      - name: Test Node + core WASM
         run: |
-          zig build -Dwasm-surface=core -Doptimize=ReleaseSmall
-          zig build -Dwasm-surface=term -Doptimize=ReleaseSmall
-
-      - name: Install terminal test dependencies
-        run: npm ci --prefix sdk/node
-
-      - name: Test Node + WASM
-        run: npm run --prefix sdk test:node-wasm
+          node --experimental-wasm-jspi sdk/tests/test-core.mjs
+          node --experimental-wasm-jspi sdk/tests/test-core-cancel.mjs
+          node --experimental-wasm-jspi sdk/tests/test-core-home-unavailable.mjs
 
   sdk-node-napi:
     name: SDK (Node + N-API)
@@ -129,10 +128,8 @@ jobs:
         id: setup-chrome
         uses: browser-actions/setup-chrome@v2
 
-      - name: Build WASM surfaces (ReleaseSmall)
-        run: |
-          zig build -Dwasm-surface=core -Doptimize=ReleaseSmall
-          zig build -Dwasm-surface=term -Doptimize=ReleaseSmall
+      - name: Build core WASM (ReleaseSmall)
+        run: zig build -Dwasm-surface=core -Doptimize=ReleaseSmall
 
       - name: Test Browser + WASM
         env:

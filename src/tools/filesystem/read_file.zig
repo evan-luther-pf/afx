@@ -171,7 +171,18 @@ pub fn call(ctx: tool_dispatch.DispatchContext, erased: tool_dispatch.ToolInput)
     const scan = try selectLinesFromContent(arena, text, &selected, ctx.max_read_file_line_len, &records);
     const snapshot_covers_full_file = !truncated_by_size and actual_len == stat.size;
     const model_view_covers_full_file = snapshot_covers_full_file and modelViewCoversFullFile(&selected, scan, records.items.len);
-    try recordSuccessfulRead(ctx, target, stat, scan.content_hash, model_view_covers_full_file, snapshot_covers_full_file);
+    const seen_lines = try arena.alloc(usize, records.items.len);
+    for (records.items, 0..) |record, index| seen_lines[index] = record.number;
+    try recordSuccessfulRead(
+        ctx,
+        target,
+        stat,
+        scan.content_hash,
+        model_view_covers_full_file,
+        snapshot_covers_full_file,
+        text,
+        seen_lines,
+    );
     tool_dispatch.reportToolResultMemory(ctx, .{
         .model_view_covers_full_file = model_view_covers_full_file,
     });
@@ -227,6 +238,7 @@ const LineRecord = struct {
 const ReadScan = struct {
     total_lines: usize,
     content_hash: read_tracker.ContentHash,
+    hashline_tag: read_tracker.HashlineTag,
     display_truncated: bool,
 };
 
@@ -313,6 +325,7 @@ fn selectLinesFromContent(
     return .{
         .total_lines = total_lines,
         .content_hash = hasher.finalResult(),
+        .hashline_tag = read_tracker.hashlineTag(content),
         .display_truncated = selection.display_truncated,
     };
 }
@@ -328,14 +341,21 @@ fn recordSuccessfulRead(
     content_hash: read_tracker.ContentHash,
     model_view_covers_full_file: bool,
     snapshot_covers_full_file: bool,
+    text: []const u8,
+    seen_lines: []const usize,
 ) tool_dispatch.DispatchError!void {
     const tracker = ctx.read_tracker orelse return;
-    try tracker.record(path, .{
+    const record = read_tracker.Record{
         .mtime_ns = stat.mtime.nanoseconds,
         .content_hash = content_hash,
         .model_view_covers_full_file = model_view_covers_full_file,
         .snapshot_covers_full_file = snapshot_covers_full_file,
-    });
+    };
+    if (snapshot_covers_full_file) {
+        _ = try tracker.recordSnapshot(path, record, text, seen_lines);
+    } else {
+        try tracker.record(path, record);
+    }
 }
 
 fn formatReadOutput(
@@ -349,32 +369,29 @@ fn formatReadOutput(
     var out: std.Io.Writer.Allocating = .init(alloc);
     defer out.deinit();
 
-    out.writer.print("<path>{s}</path>\n<content>\n", .{rel}) catch return error.OutOfMemory;
+    if (snapshot_covers_full_file) {
+        out.writer.print("[{s}#{s}]\n", .{ rel, scan.hashline_tag[0..] }) catch return error.OutOfMemory;
+    } else {
+        out.writer.print("[{s}]\n", .{rel}) catch return error.OutOfMemory;
+    }
     if (records.len > 0) {
         writeRecords(&out.writer, records) catch return error.OutOfMemory;
     } else if (scan.total_lines > 0 and input.start_line > scan.total_lines) {
         out.writer.print("... [start_line {d} is beyond end of file; total lines {d}]\n", .{ input.start_line, scan.total_lines }) catch return error.OutOfMemory;
+    } else if (scan.total_lines == 0) {
+        out.writer.writeAll("(empty file)\n") catch return error.OutOfMemory;
     }
 
     const include_sentinel = !modelViewCoversFullFile(input, scan, records.len) or !snapshot_covers_full_file;
     if (include_sentinel and (records.len > 0 or scan.display_truncated)) {
         writeTruncationSentinel(&out.writer, records.len, scan.total_lines, snapshot_covers_full_file) catch return error.OutOfMemory;
     }
-    out.writer.writeAll("</content>") catch return error.OutOfMemory;
     return try out.toOwnedSlice();
 }
 
 fn writeRecords(writer: *std.Io.Writer, records: []const LineRecord) !void {
-    const width = digitCount(records[records.len - 1].number);
-    try writeRecordsWithWidth(writer, records, width);
-}
-
-fn writeRecordsWithWidth(writer: *std.Io.Writer, records: []const LineRecord, width: usize) !void {
     for (records) |record| {
-        try writer.print("{d}", .{record.number});
-        var pad = width - digitCount(record.number);
-        while (pad > 0) : (pad -= 1) try writer.writeByte(' ');
-        try writer.writeByte('\t');
+        try writer.print("{d}:", .{record.number});
         try writer.writeAll(record.text);
         try writer.writeByte('\n');
     }
@@ -570,7 +587,7 @@ test "read_file reads workspace-relative path" {
     defer result.deinit(std.testing.allocator);
 
     try std.testing.expectEqual(.success, result.status);
-    try std.testing.expectEqualStrings("<path>notes/today.txt</path>\n<content>\n1\thello\n</content>", result.body);
+    try std.testing.expectEqualStrings("[notes/today.txt#5BF9]\n1:hello\n", result.body);
     try std.testing.expect(result.tool_result_memory.?.model_view_covers_full_file.?);
 }
 
@@ -594,7 +611,7 @@ test "read_file external absolute path preserves absolute display" {
     const result = try dispatchReadFileInWorkspace(alloc, workspace, args);
     defer result.deinit(std.testing.allocator);
 
-    const expected = try std.fmt.allocPrint(alloc, "<path>{s}</path>\n<content>\n1\toutside\n</content>", .{external});
+    const expected = try std.fmt.allocPrint(alloc, "[{s}#DCA6]\n1:outside\n", .{external});
     defer alloc.free(expected);
     try std.testing.expectEqual(.success, result.status);
     try std.testing.expectEqualStrings(expected, result.body);
@@ -663,7 +680,7 @@ test "read_file trims leading and trailing whitespace" {
     defer result.deinit(std.testing.allocator);
 
     try std.testing.expectEqual(.success, result.status);
-    const expected = try std.fmt.allocPrint(std.testing.allocator, "<path>{s}</path>\n<content>\n1\thello\n</content>", .{path});
+    const expected = try std.fmt.allocPrint(std.testing.allocator, "[{s}#5BF9]\n1:hello\n", .{path});
     defer std.testing.allocator.free(expected);
     try std.testing.expectEqualStrings(expected, result.body);
 }
@@ -685,7 +702,7 @@ test "read_file honors line range fields and uses active output shape" {
     defer result.deinit(std.testing.allocator);
 
     try std.testing.expectEqual(.success, result.status);
-    const expected = try std.fmt.allocPrint(std.testing.allocator, "<path>{s}</path>\n<content>\n2\ttwo\n3\tthree\n... [showing 2 of 3 lines; use start_line/line_count to read more.]\n</content>", .{path});
+    const expected = try std.fmt.allocPrint(std.testing.allocator, "[{s}#2543]\n2:two\n3:three\n... [showing 2 of 3 lines; use start_line/line_count to read more.]\n", .{path});
     defer std.testing.allocator.free(expected);
     try std.testing.expectEqualStrings(expected, result.body);
 }
@@ -728,7 +745,7 @@ test "read_file reports start_line beyond file length" {
     defer result.deinit(std.testing.allocator);
 
     try std.testing.expectEqual(.success, result.status);
-    const expected = try std.fmt.allocPrint(std.testing.allocator, "<path>{s}</path>\n<content>\n... [start_line 5 is beyond end of file; total lines 2]\n</content>", .{path});
+    const expected = try std.fmt.allocPrint(std.testing.allocator, "[{s}#0127]\n... [start_line 5 is beyond end of file; total lines 2]\n", .{path});
     defer std.testing.allocator.free(expected);
     try std.testing.expectEqualStrings(expected, result.body);
     try std.testing.expect(!result.tool_result_memory.?.model_view_covers_full_file.?);
@@ -750,7 +767,7 @@ test "read_file reports empty file as success" {
     defer result.deinit(std.testing.allocator);
 
     try std.testing.expectEqual(.success, result.status);
-    const expected = try std.fmt.allocPrint(std.testing.allocator, "<path>{s}</path>\n<content>\n</content>", .{path});
+    const expected = try std.fmt.allocPrint(std.testing.allocator, "[{s}#5D05]\n(empty file)\n", .{path});
     defer std.testing.allocator.free(expected);
     try std.testing.expectEqualStrings(expected, result.body);
 }

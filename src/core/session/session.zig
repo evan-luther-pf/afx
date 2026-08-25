@@ -6,6 +6,7 @@ const message = @import("../shared/message.zig");
 const text_utils = @import("../shared/text_utils.zig");
 const tool_result_errors = @import("../tooling/tool_result_errors.zig");
 const session_permission_state = @import("../permissions/session_permission_state.zig");
+const read_tracker = @import("../workspace/read_tracker.zig");
 const image_attachments = @import("../images/image_attachments.zig");
 const generation_usage_provider = @import("generation_usage_provider.zig");
 const web_fetch_artifacts = @import("web_fetch_artifacts.zig");
@@ -1589,6 +1590,7 @@ pub const SessionRuntime = struct {
     profile_usage: profile_usage_runtime.Runtime = .{},
     permission_state_lock: std.Io.Mutex = .init,
     permission_state: session_permission_state.State = .{},
+    read_tracker: read_tracker.ReadTracker = read_tracker.ReadTracker.init(std.heap.c_allocator),
     /// Count limit for owned model-context snapshots; canonical history is not truncated.
     max_history_turns: usize,
     context_history_start: usize = 0,
@@ -1613,6 +1615,7 @@ pub const SessionRuntime = struct {
         self.clearHistory(alloc);
         self.history.deinit(alloc);
         self.context_notice_hashes.deinit(alloc);
+        self.read_tracker.deinit();
     }
 
     pub fn initializeProfileUsage(
@@ -1652,6 +1655,7 @@ pub const SessionRuntime = struct {
         self.usage.resetFresh(alloc);
         self.clearPermissionState(alloc);
         self.clearHistory(alloc);
+        self.resetReadTracker();
         self.clearContextNotices();
         self.setConversationLanguage(ConversationLanguage.default());
     }
@@ -1661,6 +1665,7 @@ pub const SessionRuntime = struct {
         self.usage.resetLegacy(alloc);
         self.clearPermissionState(alloc);
         self.clearHistory(alloc);
+        self.resetReadTracker();
         self.clearContextNotices();
         self.setConversationLanguage(language);
 
@@ -1679,6 +1684,11 @@ pub const SessionRuntime = struct {
         if (context_history_start > history.len) return error.InvalidContextHistoryStart;
         try self.restore(alloc, language, history);
         self.context_history_start = context_history_start;
+    }
+
+    fn resetReadTracker(self: *SessionRuntime) void {
+        self.read_tracker.deinit();
+        self.read_tracker = read_tracker.ReadTracker.init(std.heap.c_allocator);
     }
 
     pub fn restoreWithPermissionState(

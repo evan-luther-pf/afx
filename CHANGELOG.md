@@ -1,8 +1,21 @@
 # afx
 
-## 0.0.5
+## 0.0.6
 
 <!-- release:start -->
+
+### New Features
+
+- **Hashline editing:** Make snapshot-bound, line-anchored `edit` the default with multi-file patches, block locators, persistent clipboard registers, stale-anchor recovery, file moves and removal, seen-line enforcement, and CRLF/BOM preservation
+
+### Improvements
+
+- **Hashline reads and search:** Emit content-derived `[PATH#TAG]` headers and addressable line numbers from file reads and grep matches so edits reject stale or unseen anchors before touching disk
+
+<!-- release:end -->
+
+## 0.0.5
+
 
 ### Breaking Changes
 
@@ -72,7 +85,6 @@
 - **Provider response limits:** Reject oversized Codex and Grok catalogs, streams, tool data, and replay state while keeping later input usable
 - **ACP permission validation:** Validate permission input before writing JSON-RPC frames
 
-<!-- release:end -->
 
 ## 0.0.4
 

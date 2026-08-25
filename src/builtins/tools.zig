@@ -22,6 +22,7 @@ const vision_impl = @import("../tools/agent/vision.zig");
 const create_folder_impl = @import("../tools/filesystem/create_folder.zig");
 const delete_file_impl = @import("../tools/filesystem/delete_file.zig");
 const edit_file_impl = @import("../tools/filesystem/edit_file.zig");
+const hashline_edit_impl = @import("../tools/filesystem/hashline_edit.zig");
 const file_info_impl = @import("../tools/filesystem/file_info.zig");
 const glob_files_impl = @import("../tools/filesystem/glob_files.zig");
 const grep_files_impl = @import("../tools/filesystem/grep_files.zig");
@@ -60,15 +61,16 @@ pub const ToolSpec = tool_specs.ToolSpec;
 const glob_files_description =
     "Find file paths matching a glob pattern, with mode=count for exact path counts without listing entries. Paths may be workspace-relative or external using an absolute path, ~/..., or a relative workspace escape such as ../...; external access is subject to permission policy. When to use: locate files by name, extension, or directory pattern; narrow path or pattern if candidate caps appear. When NOT to use: search file contents, read files, run find, or count non-file concepts.";
 const grep_files_description =
-    "Search text files for a literal substring, optionally narrowed by path/include, with output modes for matching lines, files-with-matches, or counts plus head_limit/offset pagination and bounded context_lines for matches mode. Paths may be workspace-relative or external using an absolute path, ~/..., or a relative workspace escape such as ../...; external access is subject to permission policy. Use include as the type/path filter, such as *.zig. When to use: find exact symbols, strings, TODOs, or usage sites. When NOT to use: regex is not supported; avoid unknown-concept exploration, filename lookup, known-path reads, and shell grep; do not repeat the same or equivalent search after a caller search only finds a definition.";
+    "Search text files for a literal substring, optionally narrowed by path/include, with output modes for matching lines, files-with-matches, or counts plus head_limit/offset pagination and bounded context_lines for matches mode. Match output records session snapshots and emits `[PATH#TAG]` hashline headers plus addressable line numbers for the default edit tool. Paths may be workspace-relative or external using an absolute path, ~/..., or a relative workspace escape such as ../...; external access is subject to permission policy. Use include as the type/path filter, such as *.zig. When to use: find exact symbols, strings, TODOs, or usage sites. When NOT to use: regex is not supported; avoid unknown-concept exploration, filename lookup, known-path reads, and shell grep; do not repeat the same or equivalent search after a caller search only finds a definition.";
 const list_files_description =
     "List directory entries from one directory level without reading file contents. Paths may be workspace-relative or external using an absolute path, ~/..., or a relative workspace escape such as ../...; external access is subject to permission policy. When to use: inspect a known folder, confirm names, or choose the next path before reading. When NOT to use: recursive discovery, content search, file counts, or shell ls.";
 const read_file_description =
-    "Read one UTF-8 text file with bounded line-numbered output and optional start_line/line_count range. Paths may be workspace-relative or external using an absolute path, ~/..., or a relative workspace escape such as ../...; external access is subject to permission policy. When to use: inspect an exact known path before editing or explaining code. When NOT to use: list directories, search many files, read binary data, or bypass dedicated search tools.";
+    "Read one UTF-8 text file with bounded line-numbered output and optional start_line/line_count range. Successful text reads emit `[PATH#TAG]` plus `LINE:TEXT`; use that exact tag and original line numbers with the default hashline edit tool. Re-read after every edit because tags and lines change. Paths may be workspace-relative or external using an absolute path, ~/..., or a relative workspace escape such as ../...; external access is subject to permission policy. When to use: inspect an exact known path before editing or explaining code. When NOT to use: list directories, search many files, read binary data, or bypass dedicated search tools.";
 const write_file_description =
     "Create or overwrite a file using complete contents. Paths may be workspace-relative or external using an absolute path, ~/..., or a relative workspace escape such as ../...; external access is subject to permission policy. When to use: add a new file or intentionally replace an entire generated/small file. When NOT to use: targeted edits to existing files, partial replacements, deleting files, or unapproved external paths.";
 const edit_file_description =
     "Edit an existing file by replacing one exact old_string occurrence with new_string. Paths may be workspace-relative or external using an absolute path, ~/..., or a relative workspace escape such as ../...; external access is subject to permission policy. When to use: make a focused patch after reading the file. When NOT to use: broad rewrites, ambiguous repeated text, generated formatting, missing files, or cross-file refactors.";
+const hashline_edit_description = hashline_edit_impl.description;
 const delete_file_description =
     "Delete a file or empty directory after the user request clearly requires removal. Paths may be workspace-relative or external using an absolute path, ~/..., or a relative workspace escape such as ../...; external access is subject to permission policy. When to use: remove obsolete files, generated artifacts, or empty folders. When NOT to use: clean up uncertain state, delete non-empty trees, or modify contents that should be edited instead.";
 const rename_file_description =
@@ -693,6 +695,34 @@ pub const write_file = ToolSpec{
     .take_file_mutation_input_fn = write_file_impl.takeFileMutationInput,
     .reads_only_fn = write_file_impl.readsOnly,
     .irreversible_fn = write_file_impl.isIrreversible,
+};
+
+pub const edit = ToolSpec{
+    .name = "edit",
+    .description = hashline_edit_description,
+    .gateway_schema = .{
+        .name = "edit",
+        .description = hashline_edit_description,
+        .input_schema = .{
+            .properties = &.{
+                .{ .name = "input", .json_type = .string, .description = "Complete hashline patch beginning with *** Begin Patch and ending with *** End Patch." },
+            },
+            .required = &.{"input"},
+        },
+    },
+    .executor_kind = .hashline_edit,
+    .activity_kind = .edit,
+    .requires_approval = true,
+    .action_label = "Editing",
+    .completed_action_label = "Edited",
+    .label_arg_kind = .none,
+    .label_arg_default = "files",
+    .permission_target_kind = .none,
+    .decode = hashline_edit_impl.decode,
+    .validate = hashline_edit_impl.validate,
+    .call = hashline_edit_impl.call,
+    .reads_only_fn = hashline_edit_impl.readsOnly,
+    .irreversible_fn = hashline_edit_impl.isIrreversible,
 };
 
 pub const edit_file = ToolSpec{
@@ -1663,7 +1693,7 @@ pub const all = [_]tool_dispatch.Tool{
     grep_files,
     read_file,
     write_file,
-    edit_file,
+    edit,
     delete_file,
     rename_file,
     copy_file,
@@ -2193,7 +2223,7 @@ pub const advertisement_order = [_][]const u8{
     "semantic_search",
     "rule",
     "lsp",
-    "edit_file",
+    "edit",
     "write_file",
     "delete_file",
     "rename_file",
@@ -2278,7 +2308,7 @@ test "built-in tools register exact active local order" {
         "grep_files",
         "read_file",
         "write_file",
-        "edit_file",
+        "edit",
         "delete_file",
         "rename_file",
         "copy_file",
@@ -2485,34 +2515,30 @@ test "built-in write_file owns product metadata schema and callbacks" {
     try std.testing.expect(write_file.irreversible_fn == write_file_impl.isIrreversible);
 }
 
-test "built-in edit_file owns product metadata schema and callbacks" {
-    const schema_json = try tool_specs.toolGatewaySchemaJson(std.testing.allocator, edit_file);
+test "built-in edit defaults to hashline schema and callbacks" {
+    const schema_json = try tool_specs.toolGatewaySchemaJson(std.testing.allocator, edit);
     defer std.testing.allocator.free(schema_json);
 
-    try std.testing.expectEqualStrings("edit_file", edit_file.name);
-    try std.testing.expect(std.mem.find(u8, edit_file.description, "replacing one exact old_string occurrence") != null);
-    try std.testing.expect(std.mem.find(u8, edit_file.description, "external access is subject to permission policy") != null);
-    try std.testing.expect(std.mem.find(u8, schema_json, "\"required\":[\"path\",\"old_string\",\"new_string\"]") != null);
-    try std.testing.expect(std.mem.find(u8, schema_json, "replace_all") == null);
-    try std.testing.expect(std.mem.find(u8, schema_json, "external path") != null);
-    try std.testing.expect(std.mem.find(u8, schema_json, "~/...") != null);
-    try std.testing.expect(std.mem.find(u8, schema_json, "../...") != null);
-    try std.testing.expect(std.mem.find(u8, schema_json, "permission policy") != null);
-    try std.testing.expect(std.mem.find(u8, schema_json, "outside the workspace") == null);
-    try std.testing.expectEqual(tool_dispatch.ExecutorKind.edit_file, edit_file.executor_kind);
-    try std.testing.expectEqual(types.ToolActivityKind.edit, edit_file.activity_kind);
-    try std.testing.expect(edit_file.requires_approval);
-    try std.testing.expectEqual(tool_dispatch.LabelArgKind.path, edit_file.label_arg_kind);
-    try std.testing.expectEqualStrings("file", edit_file.label_arg_default);
-    try std.testing.expectEqual(tool_dispatch.PermissionTargetKind.path_existing_parent, edit_file.permission_target_kind);
-    try std.testing.expectEqualStrings("Editing", edit_file.action_label);
-    try std.testing.expectEqualStrings("Edited", edit_file.completed_action_label);
-    try std.testing.expect(edit_file.decode == edit_file_impl.decode);
-    try std.testing.expect(edit_file.validate.? == edit_file_impl.validate);
-    try std.testing.expect(edit_file.call == edit_file_impl.call);
-    try std.testing.expect(edit_file.take_file_mutation_input_fn.? == edit_file_impl.takeFileMutationInput);
-    try std.testing.expect(edit_file.reads_only_fn == edit_file_impl.readsOnly);
-    try std.testing.expect(edit_file.irreversible_fn == edit_file_impl.isIrreversible);
+    try std.testing.expectEqualStrings("edit", edit.name);
+    try std.testing.expect(std.mem.find(u8, edit.description, "Line-anchored hashline") != null);
+    try std.testing.expect(std.mem.find(u8, edit.description, "*** Begin Patch") != null);
+    try std.testing.expect(std.mem.find(u8, schema_json, "\"required\":[\"input\"]") != null);
+    try std.testing.expect(std.mem.find(u8, schema_json, "\"old_string\"") == null);
+    try std.testing.expectEqual(tool_dispatch.ExecutorKind.hashline_edit, edit.executor_kind);
+    try std.testing.expectEqual(types.ToolActivityKind.edit, edit.activity_kind);
+    try std.testing.expect(edit.requires_approval);
+    try std.testing.expectEqual(tool_dispatch.LabelArgKind.none, edit.label_arg_kind);
+    try std.testing.expectEqual(tool_dispatch.PermissionTargetKind.none, edit.permission_target_kind);
+    try std.testing.expectEqualStrings("Editing", edit.action_label);
+    try std.testing.expectEqualStrings("Edited", edit.completed_action_label);
+    try std.testing.expect(edit.decode == hashline_edit_impl.decode);
+    try std.testing.expect(edit.validate.? == hashline_edit_impl.validate);
+    try std.testing.expect(edit.call == hashline_edit_impl.call);
+    try std.testing.expect(edit.take_file_mutation_input_fn == null);
+    try std.testing.expect(edit.reads_only_fn == hashline_edit_impl.readsOnly);
+    try std.testing.expect(edit.irreversible_fn == hashline_edit_impl.isIrreversible);
+    try std.testing.expect(registry.lookup("edit") != null);
+    try std.testing.expect(registry.lookup("edit_file") == null);
 }
 
 test "built-in delete_file owns product metadata schema and callbacks" {
@@ -3169,24 +3195,22 @@ test "built-in read_tool_result owns product metadata schema and callbacks" {
 test "built-in write and edit tools register canonical mutation input ownership" {
     const write = registry.lookup("write_file") orelse
         return error.TestExpectedEqual;
-    const edit = registry.lookup("edit_file") orelse
-        return error.TestExpectedEqual;
+    const legacy_edit = edit_file;
     const read = registry.lookup("read_file") orelse
         return error.TestExpectedEqual;
 
     try std.testing.expect(write.take_file_mutation_input_fn != null);
-    try std.testing.expect(edit.take_file_mutation_input_fn != null);
+    try std.testing.expect(legacy_edit.take_file_mutation_input_fn != null);
     try std.testing.expect(read.take_file_mutation_input_fn == null);
 }
 
 test "built-in write and edit tools declare their mutation executor kind" {
     const write = registry.lookup("write_file") orelse
         return error.TestExpectedEqual;
-    const edit = registry.lookup("edit_file") orelse
-        return error.TestExpectedEqual;
+    const legacy_edit = edit_file;
 
     try std.testing.expectEqual(tool_dispatch.ExecutorKind.write_file, write.executor_kind);
-    try std.testing.expectEqual(tool_dispatch.ExecutorKind.edit_file, edit.executor_kind);
+    try std.testing.expectEqual(tool_dispatch.ExecutorKind.edit_file, legacy_edit.executor_kind);
 }
 
 fn noopInputDeinit(_: *anyopaque, _: Allocator) void {}

@@ -1124,6 +1124,7 @@ const external_path_tools = [_][]const u8{
     "file_info",
     "write_file",
     "edit_file",
+    "edit",
     "delete_file",
     "create_folder",
     "copy_file",
@@ -1147,6 +1148,7 @@ test "allowsExternalPath preserves the exact eligible tool set" {
         "file_info",
         "write_file",
         "edit_file",
+        "edit",
         "delete_file",
         "create_folder",
         "copy_file",
@@ -1166,6 +1168,7 @@ test "allowsExternalPath preserves the exact eligible tool set" {
 pub fn isFilesystemMutationTool(tool_name: []const u8) bool {
     return std.mem.eql(u8, tool_name, "write_file") or
         std.mem.eql(u8, tool_name, "edit_file") or
+        std.mem.eql(u8, tool_name, "edit") or
         std.mem.eql(u8, tool_name, "delete_file") or
         std.mem.eql(u8, tool_name, "create_folder") or
         std.mem.eql(u8, tool_name, "copy_file") or
@@ -1494,7 +1497,7 @@ pub fn formatPermissionsStatus(
 
 pub fn permissionNameForTool(tool_name: []const u8) []const u8 {
     if (std.mem.eql(u8, tool_name, "read_file")) return "read";
-    if (std.mem.eql(u8, tool_name, "write_file") or std.mem.eql(u8, tool_name, "edit_file")) return "edit";
+    if (std.mem.eql(u8, tool_name, "write_file") or std.mem.eql(u8, tool_name, "edit_file") or std.mem.eql(u8, tool_name, "edit")) return "edit";
     if (std.mem.eql(u8, tool_name, "list_files")) return "list";
     if (std.mem.eql(u8, tool_name, "glob_files")) return "glob";
     if (std.mem.eql(u8, tool_name, "grep_files")) return "grep";

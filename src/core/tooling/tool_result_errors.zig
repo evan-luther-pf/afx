@@ -106,6 +106,7 @@ const adapter_semantic_failure_prefixes = [_][]const u8{
     "Unsupported tool:",
     "read_file failed:",
     "edit_file failed:",
+    "edit failed:",
     "delete_file failed:",
     "rename_file failed:",
     "copy_file failed:",

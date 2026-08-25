@@ -224,10 +224,10 @@ const test_write_file = blk: {
 
 const test_edit_file = blk: {
     var spec = test_read_file;
-    spec.name = "edit_file";
+    spec.name = "edit";
     spec.description = "Test file editing. When to use: exercise registered edit projection. When NOT to use: assert product-specific filesystem behavior.";
     spec.gateway_schema = .{
-        .name = "edit_file",
+        .name = "edit",
         .description = spec.description,
         .input_schema = .{
             .properties = &.{
@@ -745,7 +745,7 @@ const test_order = [_][]const u8{
     "list_files",
     "file_info",
     "semantic_search",
-    "edit_file",
+    "edit",
     "write_file",
     "delete_file",
     "rename_file",
@@ -1247,7 +1247,7 @@ test "later allow or ask after category deny keeps tools advertised" {
     var names = try collectToolNames(std.testing.allocator, json);
     defer freeNames(std.testing.allocator, &names);
 
-    try expectContainsName(names.items, "edit_file");
+    try expectContainsName(names.items, "edit");
     try expectContainsName(names.items, "write_file");
     try expectContainsName(names.items, "terminal");
 }
@@ -1264,7 +1264,7 @@ test "later category deny hides earlier target-specific overrides" {
     var names = try collectToolNames(std.testing.allocator, json);
     defer freeNames(std.testing.allocator, &names);
 
-    try expectNotContainsName(names.items, "edit_file");
+    try expectNotContainsName(names.items, "edit");
     try expectNotContainsName(names.items, "write_file");
 }
 
@@ -1281,7 +1281,7 @@ test "target-specific later deny overrides target-specific allow" {
     var names = try collectToolNames(std.testing.allocator, json);
     defer freeNames(std.testing.allocator, &names);
 
-    try expectNotContainsName(names.items, "edit_file");
+    try expectNotContainsName(names.items, "edit");
     try expectNotContainsName(names.items, "write_file");
 }
 
@@ -1297,7 +1297,7 @@ test "target-specific edit and bash denies keep tools advertised" {
     var names = try collectToolNames(std.testing.allocator, json);
     defer freeNames(std.testing.allocator, &names);
 
-    try expectContainsName(names.items, "edit_file");
+    try expectContainsName(names.items, "edit");
     try expectContainsName(names.items, "write_file");
     try expectContainsName(names.items, "terminal");
 }

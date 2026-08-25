@@ -19,8 +19,15 @@ policy.</p>
 <h2 id="files">Files and terminals</h2>
 
 <p>File tools read bounded ranges, list directories, search names and contents,
-and perform exact edits, writes, copies, moves, and deletion. Terminal tools run
-captured commands or keep persistent processes alive for later input and output.</p>
+write new files, and perform hashline edits. Terminal tools run captured commands
+or keep persistent processes alive for later input and output.</p>
+
+<p>Reads and grep matches emit content-derived headers such as
+<code>[src/main.zig#A1B2]</code> with original line numbers. The default
+<code>edit</code> tool requires that tag, rejects stale and unseen anchors, and
+supports tight ranges, syntax blocks, insert gaps, clipboard registers, moves,
+removal, and multi-file preflight. Re-read after each edit because the tag and
+line numbers change.</p>
 
 <p>Common reads remain compact. Commands and mutations use bounded visual cards.
 Long results can be recovered through stable result handles.</p>

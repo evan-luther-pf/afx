@@ -75,6 +75,12 @@ Use `/model` to choose a model, `/providers` to manage accounts and keys, `/sess
 - Runs independent work in parallel through focused task agents
 - Supports Codex, Gemini, Anthropic, Grok, AI Gateway, and compatible providers
 
+## Hashline editing
+
+The default `edit` tool binds every patch to the exact file snapshot afx displayed. Reads and searches return headers such as `[src/main.zig#A1B2]` with stable original line numbers. An edit with a stale tag, an unseen anchor, an overlapping range, or a changed target is rejected before disk mutation.
+
+Hashline patches can replace tight ranges, target complete syntax blocks, insert at line gaps, move or remove files, and move captured text through persistent named registers. Multi-file patches are prepared together, preserve line endings and UTF-8 BOMs, and recover safely when unrelated lines changed after the read.
+
 ## A terminal interface that stays out of the way
 
 Common reads remain compact. Commands, edits, searches, tasks, and debugger work expand into bounded OMP-style cards. Search cards show the query, answer, sources, model, and token usage without hiding the evidence.

@@ -2454,6 +2454,7 @@ pub fn mapToolKind(tool_name: []const u8) acp_types.ToolCallKind {
     if (std.mem.eql(u8, tool_name, "web_search")) return .search;
     if (std.mem.eql(u8, tool_name, "write_file")) return .edit;
     if (std.mem.eql(u8, tool_name, "edit_file")) return .edit;
+    if (std.mem.eql(u8, tool_name, "edit")) return .edit;
     if (std.mem.eql(u8, tool_name, "delete_file")) return .delete;
     if (std.mem.eql(u8, tool_name, "rename_file")) return .move;
     if (std.mem.eql(u8, tool_name, "copy_file")) return .move;
