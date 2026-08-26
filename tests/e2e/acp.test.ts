@@ -1998,7 +1998,7 @@ describe("acp: model-independent", () => {
   );
 
   test(
-    "initialize reports that image prompt blocks are unsupported",
+    "initialize advertises verified local image prompt blocks",
     async () => {
       const root = createIsolatedRoot("afx-acp-initialize-");
       try {
@@ -2032,7 +2032,7 @@ describe("acp: model-independent", () => {
         expect(resp.result.agentInfo.name).toBe("afx");
         expect(resp.result.agentInfo.version).toBe(version.stdout.trim());
         expect(resp.result.agentCapabilities.loadSession).toBe(true);
-        expect(resp.result.agentCapabilities.promptCapabilities.image).toBe(false);
+        expect(resp.result.agentCapabilities.promptCapabilities.image).toBe(true);
         expect(resp.result.agentCapabilities.mcpCapabilities.http).toBe(true);
         expect(resp.result.agentCapabilities.mcpCapabilities.sse).toBe(true);
         expect(resp.result.agentCapabilities.sessionCapabilities.resume).toEqual({});

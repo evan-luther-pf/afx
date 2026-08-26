@@ -1501,28 +1501,30 @@ fn writeAfxActivitySnapshot(
     var agents: std.Io.Writer.Allocating = .init(alloc);
     defer agents.deinit();
     try agents.writer.writeByte('[');
-    if (state.subagent_host) |host| {
-        var result = try host.manager.snapshot(alloc, .{
-            .root_id = host.root_id,
-            .limit = 100,
-        });
-        defer result.deinit(alloc);
-        if (result == .snapshot) {
-            for (result.snapshot.nodes, 0..) |node, index| {
-                if (index > 0) try agents.writer.writeByte(',');
-                try agents.writer.writeAll("{\"id\":");
-                try writeJsonStr(node.child_id, &agents.writer);
-                try agents.writer.writeAll(",\"parentId\":");
-                try writeJsonStr(node.parent_id, &agents.writer);
-                try agents.writer.writeAll(",\"name\":");
-                try writeJsonStr(node.name, &agents.writer);
-                try agents.writer.writeAll(",\"state\":");
-                try writeJsonStr(@tagName(node.state), &agents.writer);
-                try agents.writer.writeAll(",\"depth\":");
-                try agents.writer.print("{d}", .{node.depth});
-                try agents.writer.writeAll(",\"startedAtMs\":");
-                try agents.writer.print("{d}", .{node.created_at_ms});
-                try agents.writer.writeByte('}');
+    if (comptime !host_target.is_wasm) {
+        if (state.subagent_host) |host| {
+            var result = try host.manager.snapshot(alloc, .{
+                .root_id = host.root_id,
+                .limit = 100,
+            });
+            defer result.deinit(alloc);
+            if (result == .snapshot) {
+                for (result.snapshot.nodes, 0..) |node, index| {
+                    if (index > 0) try agents.writer.writeByte(',');
+                    try agents.writer.writeAll("{\"id\":");
+                    try writeJsonStr(node.child_id, &agents.writer);
+                    try agents.writer.writeAll(",\"parentId\":");
+                    try writeJsonStr(node.parent_id, &agents.writer);
+                    try agents.writer.writeAll(",\"name\":");
+                    try writeJsonStr(node.name, &agents.writer);
+                    try agents.writer.writeAll(",\"state\":");
+                    try writeJsonStr(@tagName(node.state), &agents.writer);
+                    try agents.writer.writeAll(",\"depth\":");
+                    try agents.writer.print("{d}", .{node.depth});
+                    try agents.writer.writeAll(",\"startedAtMs\":");
+                    try agents.writer.print("{d}", .{node.created_at_ms});
+                    try agents.writer.writeByte('}');
+                }
             }
         }
     }
@@ -1914,48 +1916,62 @@ fn handleAfxCommandExecute(
         try writeJsonStr(if (stopped != null) "true" else "false", &out.writer);
         try out.writer.writeAll("}}");
     } else if (std.mem.eql(u8, command, "agent-cancel")) {
-        const id = try requiredStringArgument(state, alloc, msg.id, arguments, "id") orelse return;
-        const host = state.subagent_host orelse return state.writer.writeError(alloc, msg.id, .{
-            .code = ErrorCode.invalid_request,
-            .message = "Subagent runtime unavailable",
-        });
-        const count = host.owner.cancel(id, "Cancelled from GUI", io_mod.milliTimestamp()) catch
+        if (comptime host_target.is_wasm) {
             return state.writer.writeError(alloc, msg.id, .{
                 .code = ErrorCode.invalid_request,
-                .message = "Agent could not be cancelled",
+                .message = "Subagent runtime unavailable",
             });
-        try out.writer.writeAll("{\"kind\":\"state_change\",\"title\":\"Agent cancelled\",\"fields\":{\"count\":");
-        var count_text: [32]u8 = undefined;
-        try writeJsonStr(try std.fmt.bufPrint(&count_text, "{d}", .{count}), &out.writer);
-        try out.writer.writeAll("}}");
+        } else {
+            const id = try requiredStringArgument(state, alloc, msg.id, arguments, "id") orelse return;
+            const host = state.subagent_host orelse return state.writer.writeError(alloc, msg.id, .{
+                .code = ErrorCode.invalid_request,
+                .message = "Subagent runtime unavailable",
+            });
+            const count = host.owner.cancel(id, "Cancelled from GUI", io_mod.milliTimestamp()) catch
+                return state.writer.writeError(alloc, msg.id, .{
+                    .code = ErrorCode.invalid_request,
+                    .message = "Agent could not be cancelled",
+                });
+            try out.writer.writeAll("{\"kind\":\"state_change\",\"title\":\"Agent cancelled\",\"fields\":{\"count\":");
+            var count_text: [32]u8 = undefined;
+            try writeJsonStr(try std.fmt.bufPrint(&count_text, "{d}", .{count}), &out.writer);
+            try out.writer.writeAll("}}");
+        }
     } else if (std.mem.eql(u8, command, "agent-message")) {
-        const id = try requiredStringArgument(state, alloc, msg.id, arguments, "id") orelse return;
-        const content = try requiredStringArgument(state, alloc, msg.id, arguments, "content") orelse return;
-        const host = state.subagent_host orelse return state.writer.writeError(alloc, msg.id, .{
-            .code = ErrorCode.invalid_request,
-            .message = "Subagent runtime unavailable",
-        });
-        const timestamp = io_mod.milliTimestamp();
-        const invocation_id = try std.fmt.allocPrint(alloc, "gui-message-{d}", .{timestamp});
-        defer alloc.free(invocation_id);
-        var result = host.sendMessage(alloc, .{
-            .caller_id = host.root_id,
-            .invocation_id = invocation_id,
-            .child_id = id,
-            .content = content,
-            .timestamp_ms = timestamp,
-        }) catch return state.writer.writeError(alloc, msg.id, .{
-            .code = ErrorCode.invalid_request,
-            .message = "Message could not be sent",
-        });
-        defer result.deinit(alloc);
-        if (result == .failure) {
+        if (comptime host_target.is_wasm) {
             return state.writer.writeError(alloc, msg.id, .{
+                .code = ErrorCode.invalid_request,
+                .message = "Subagent runtime unavailable",
+            });
+        } else {
+            const id = try requiredStringArgument(state, alloc, msg.id, arguments, "id") orelse return;
+            const content = try requiredStringArgument(state, alloc, msg.id, arguments, "content") orelse return;
+            const host = state.subagent_host orelse return state.writer.writeError(alloc, msg.id, .{
+                .code = ErrorCode.invalid_request,
+                .message = "Subagent runtime unavailable",
+            });
+            const timestamp = io_mod.milliTimestamp();
+            const invocation_id = try std.fmt.allocPrint(alloc, "gui-message-{d}", .{timestamp});
+            defer alloc.free(invocation_id);
+            var result = host.sendMessage(alloc, .{
+                .caller_id = host.root_id,
+                .invocation_id = invocation_id,
+                .child_id = id,
+                .content = content,
+                .timestamp_ms = timestamp,
+            }) catch return state.writer.writeError(alloc, msg.id, .{
                 .code = ErrorCode.invalid_request,
                 .message = "Message could not be sent",
             });
+            defer result.deinit(alloc);
+            if (result == .failure) {
+                return state.writer.writeError(alloc, msg.id, .{
+                    .code = ErrorCode.invalid_request,
+                    .message = "Message could not be sent",
+                });
+            }
+            try out.writer.writeAll("{\"kind\":\"state_change\",\"title\":\"Message sent\",\"fields\":{}}");
         }
-        try out.writer.writeAll("{\"kind\":\"state_change\",\"title\":\"Message sent\",\"fields\":{}}");
     } else if (std.mem.eql(u8, command, "permissions")) {
         if (arguments) |values| {
             if (values.get("mode")) |mode_value| {

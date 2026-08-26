@@ -101,6 +101,7 @@ const AcpContext = struct {
     /// session/set_mode changes never mutate a running turn.
     captured_mode: ?[]const u8 = null,
     captured_permission_mode: ?PermissionMode = null,
+    recovery_source_to_suppress: ?[]const u8 = null,
 
     fn deinitPublishedToolCalls(self: *AcpContext) void {
         var keys = self.published_tool_calls.keyIterator();
@@ -637,6 +638,7 @@ pub fn handlePrompt(
             },
         };
         recovery_checkpoint = try checkpoint.dupe(alloc);
+        ctx.recovery_source_to_suppress = recovery_checkpoint.?.assistant_source;
     }
 
     var tool_projection = try state.cfg.mode_registry.buildGatewayToolProjection(alloc, activeToolSet(state), captured_mode, .{
@@ -2146,7 +2148,13 @@ fn pushRouteRecoveryStatus(
 fn pushText(raw_ctx: *anyopaque, emission: agent_runtime.TextEmission) !void {
     const ctx: *AcpContext = @ptrCast(@alignCast(raw_ctx));
     const text = switch (emission) {
-        .assistant_source => |text| text,
+        .assistant_source => |text| text: {
+            if (ctx.recovery_source_to_suppress) |source| {
+                ctx.recovery_source_to_suppress = null;
+                if (std.mem.eql(u8, source, text)) return;
+            }
+            break :text text;
+        },
         .assistant_rendered => return,
         .operational => |text| text,
     };
