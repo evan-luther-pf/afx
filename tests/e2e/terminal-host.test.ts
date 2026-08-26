@@ -3669,7 +3669,7 @@ test.skipIf(!tmuxAvailable())("private tmux teardown owns partial recovery resou
     ["-S", tmuxSocket, "list-sessions", "-F", "#{session_name}"],
     { encoding: "utf8" },
   ).trim();
-  const backendIdentity = sessionName.slice(3);
+  const backendIdentity = sessionName.replace(/^afx-/, "");
   const panePid = Number(execFileSync(
     "tmux",
     ["-S", tmuxSocket, "display-message", "-p", "-t", sessionName, "#{pane_pid}"],
