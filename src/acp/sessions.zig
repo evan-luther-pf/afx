@@ -916,8 +916,11 @@ pub fn handleListSessions(state: *server.ServerState, alloc: Allocator, msg: *js
     defer out.deinit();
 
     try out.writer.writeAll("{\"sessions\":[");
-    for (session_list.items, 0..) |summary, i| {
-        if (i > 0) try out.writer.writeAll(",");
+    var first = true;
+    for (session_list.items) |summary| {
+        if (!try subagent_resume_admission.summaryIsActionable(store, alloc, summary.id)) continue;
+        if (!first) try out.writer.writeAll(",");
+        first = false;
         try out.writer.writeAll("{\"sessionId\":");
         try writeJsonStr(summary.id, &out.writer);
         try out.writer.writeAll(",\"title\":");
