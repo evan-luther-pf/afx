@@ -1218,15 +1218,14 @@ test "buildSlashCommandsJson includes all expected commands" {
     defer alloc.free(json);
 
     const expected_commands = [_][]const u8{
-        "help",  "status", "new",       "clear", "reset",  "permissions",
-        "model", "models", "providers", "login", "logout", "fast",
+        "help",  "status", "new",       "clear", "reset",   "permissions",
+        "model", "models", "providers", "login", "logout",  "fast",
+        "mcp",   "skills", "continue",  "tree",  "handoff", "plan",
     };
     for (expected_commands) |cmd| {
         try std.testing.expect(std.mem.find(u8, json, cmd) != null);
     }
     try std.testing.expect(std.mem.find(u8, json, "\"name\":\"summary\"") == null);
-    try std.testing.expect(std.mem.find(u8, json, "\"name\":\"skills\"") == null);
-    try std.testing.expect(std.mem.find(u8, json, "\"name\":\"mcp\"") == null);
 }
 
 test "buildSlashCommandsJson excludes internal subcommands" {
