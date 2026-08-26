@@ -615,6 +615,7 @@ pub fn repair_legacy_image_snapshots(
         alloc,
         candidate,
         snapshot_dir,
+        !snapshot_dir_existed,
     ) catch |err| {
         cleanup_candidate_snapshot_files(candidate, history);
         if (!snapshot_dir_existed) remove_empty_snapshot_directory(snapshot_dir);
@@ -686,6 +687,7 @@ fn repair_legacy_image_snapshots_in_place(
     alloc: Allocator,
     history: []HistoryTurn,
     snapshot_dir: []const u8,
+    repair_missing_owned_directory: bool,
 ) Allocator.Error!bool {
     var changed = false;
     for (history) |*turn| {
@@ -695,19 +697,11 @@ fn repair_legacy_image_snapshots_in_place(
         var drop_indexes: std.ArrayList(usize) = .empty;
         defer drop_indexes.deinit(alloc);
         for (images_ptr.*, 0..) |*image, image_index| {
-            if (image.snapshot_path != null and image.snapshot_sha256 != null) {
-                var verified = image_attachments.loadVerifiedSnapshot(
-                    alloc,
-                    image.*,
-                    .{},
-                ) catch |err| switch (err) {
-                    error.OutOfMemory => return error.OutOfMemory,
-                    else => null,
-                };
-                if (verified) |*snapshot| {
-                    snapshot.deinit(alloc);
-                    continue;
-                }
+            if (image.snapshot_path != null and
+                image.snapshot_sha256 != null and
+                !repair_missing_owned_directory)
+            {
+                continue;
             }
             if (image.snapshot_path) |path| alloc.free(path);
             if (image.snapshot_sha256) |digest| alloc.free(digest);
@@ -840,6 +834,7 @@ test "legacy image snapshot repair captures available path once" {
     );
     defer alloc.free(missing_snapshot);
     try std.Io.Dir.deleteFileAbsolute(std.testing.io, missing_snapshot);
+    try std.Io.Dir.deleteDirAbsolute(std.testing.io, snapshot_dir);
     try std.testing.expect(try repair_legacy_image_snapshots(alloc, &history, snapshot_dir));
 
     var repaired: std.Io.Writer.Allocating = .init(alloc);
