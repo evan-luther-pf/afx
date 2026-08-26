@@ -468,6 +468,23 @@ pub fn releaseActiveSession(state: *ServerState) !void {
     destroyActiveSession(state);
 }
 
+/// Releases the active session for a session switch. A failed final usage
+/// flush is logged and the session is destroyed anyway: the event log already
+/// holds every committed turn, so losing the compacted usage snapshot is
+/// strictly better than stranding the client on the old session.
+// ponytail: lossy on flush failure; add client-visible warning if reports show real usage loss
+pub fn releaseActiveSessionForSwitch(state: *ServerState) void {
+    // closeActiveSession frees the active session (including its id) even on
+    // failure, so the log must not reference session fields.
+    closeActiveSession(state) catch |err| {
+        debug_trace.logf(
+            "session",
+            "failed to flush ACP session usage during switch err={s}",
+            .{@errorName(err)},
+        );
+    };
+}
+
 fn closeActiveSession(state: *ServerState) !void {
     const active = if (state.active_session) |*session| session else return;
     disableSubagentHost(state);

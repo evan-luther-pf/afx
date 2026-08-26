@@ -225,14 +225,7 @@ pub fn handleNewSession(state: *server.ServerState, alloc: Allocator, msg: *json
         .effort = state.effort,
         .session_rt = session_rt,
         .mcp = session_mcp,
-    }) catch {
-        _ = store.discardPristineStartedSession(alloc, &writable);
-        writable_owned = false;
-        return state.writer.writeError(alloc, msg.id, .{
-            .code = ErrorCode.internal_error,
-            .message = "Failed to save active session",
-        });
-    };
+    });
     writable_owned = false;
     store_owned = false;
     session_id_owned = false;
@@ -614,11 +607,7 @@ fn handleRestoreSession(
         .effort = writable.state.preferences.effort,
         .session_rt = session_rt,
         .mcp = session_mcp,
-    }) catch
-        return state.writer.writeError(alloc, msg.id, .{
-            .code = ErrorCode.internal_error,
-            .message = "Failed to save active session",
-        });
+    });
     writable_owned = false;
     store_owned = false;
     sid_owned = false;
@@ -771,8 +760,8 @@ fn activateSession(
     state: *server.ServerState,
     store: session_store.Store,
     activation: SessionActivation,
-) !void {
-    try server.releaseActiveSession(state);
+) void {
+    server.releaseActiveSessionForSwitch(state);
     state.active_session = .{
         .session_id = activation.session_id,
         .store = store,
