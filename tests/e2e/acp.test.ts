@@ -6553,9 +6553,10 @@ describe("acp: model-independent", () => {
           timeoutMs: TIMEOUT,
         });
         expect(acknowledged.code).toBe(0);
-        expect(gateway.requests.at(-1)?.body).toContain(
-          "ACP_ONE_OFF_LOAD_CHILD_DONE",
+        const acknowledgeRequest = [...gateway.requests].reverse().find((request) =>
+          request.body.includes("Acknowledge the completed one-off result.")
         );
+        expect(acknowledgeRequest?.body).toContain("ACP_ONE_OFF_LOAD_CHILD_DONE");
         await waitForCondition(
           "ACP one-off child retirement",
           () => !existsSync(control.path),

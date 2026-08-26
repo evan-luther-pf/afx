@@ -1685,6 +1685,7 @@ describe.skipIf(!tmuxAvailable())("tui: Agents & processes", () => {
         expect(externalApproval).toContain("EXTERNAL");
         expect(existsSync(externalMarker)).toBe(false);
         await active.sendLiteralText("3");
+        await active.sendKeys("Enter");
         await active.waitForPane(
           (pane) =>
             pane.includes("ALWAYS_WRITE_EXTERNAL_DONE") &&
