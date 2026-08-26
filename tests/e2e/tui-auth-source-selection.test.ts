@@ -2263,7 +2263,12 @@ test(
     );
     expect(imageResponses).toHaveLength(3);
     const imageBody = imageResponses[2]!.body ?? "";
-    expect(imageBody.match(/"type":"input_image"/g)).toHaveLength(1);
+    const imagePayload: unknown = JSON.parse(imageBody);
+    if (!imagePayload || typeof imagePayload !== "object" || !("input" in imagePayload)) {
+      throw new Error("Codex image request omitted input");
+    }
+    const imageInput = JSON.stringify(imagePayload.input);
+    expect(imageInput.match(/"type":"input_image"/g)).toHaveLength(1);
     expect(imageBody).toContain("data:image/png;base64,");
     expect(imageBody).not.toContain('"name":"vision"');
     expect(gateway.requests).toHaveLength(gatewayRequestsBeforeImage);

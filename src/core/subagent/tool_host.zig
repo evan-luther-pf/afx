@@ -2632,7 +2632,7 @@ fn captureAdmission(
             if (!included) continue;
         }
         if (request.configuration.depth >= request.configuration.max_depth and
-            (std.mem.eql(u8, tool_name, "task") or std.mem.eql(u8, tool_name, "subagent")))
+            std.mem.eql(u8, tool_name, "task"))
         {
             continue;
         }

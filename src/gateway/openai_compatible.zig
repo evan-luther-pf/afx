@@ -168,12 +168,14 @@ fn writeMessages(
                         try writer.writeByte('}');
                         first_part = false;
                     };
-                    for (message.images) |image| {
-                        if (!first_part) try writer.writeByte(',');
-                        var snapshot = try image_attachments.loadVerifiedSnapshot(alloc, image, .{});
-                        defer snapshot.deinit(alloc);
-                        try writeImagePart(writer, alloc, snapshot);
-                        first_part = false;
+                    if (current_images.len == 0) {
+                        for (message.images) |image| {
+                            if (!first_part) try writer.writeByte(',');
+                            var snapshot = try image_attachments.loadVerifiedSnapshot(alloc, image, .{});
+                            defer snapshot.deinit(alloc);
+                            try writeImagePart(writer, alloc, snapshot);
+                            first_part = false;
+                        }
                     }
                     for (current_images) |image| {
                         if (!first_part) try writer.writeByte(',');

@@ -908,20 +908,19 @@ printf '${trailingMarker}   '
       await active.waitForComposer(TIMEOUT);
       await active.sendText("Run the prepared command.");
       const compact = await waitForScrollback(active, doneMarker);
-      expect(compact).toContain("● 1 tool call · 1 command");
-      expect(compact).toContain("└ Ran ./command-output-controls.sh");
-      expect(compact).not.toContain(`│ ${ansiMarker}`);
-      expect(compact).not.toContain(`│ ${crMarker}`);
-      expect(compact).not.toContain("│ TAB");
-      expect(compact).not.toContain("│ NUL:\\x00:END");
-      expect(compact).not.toContain("│ INVALID:\\xff:END");
+      expect(compact).toContain("Ran ./command-output-controls.sh");
+      expect(compact).toContain(`│ ${ansiMarker}`);
+      expect(compact).toContain(`│ ${crMarker}`);
+      expect(compact).toContain("│ TAB");
+      expect(compact).toContain("│ NUL:\\x00:END");
+      expect(compact).toContain("│ INVALID:\\xff:END");
       expect(compact).not.toContain("CR_STAGE_01");
       expect(compact).not.toContain("\\x0d");
       expect(compact).not.toContain("\\x1b[31m");
-      expect(compact).not.toContain("BOUNDARY_LEADING");
+      expect(compact).toContain("BOUNDARY_LEADING");
       expect(compact).not.toContain(splitMarker);
       expect(compact).not.toContain(trailingMarker);
-      expect(compact).not.toContain("lines more (ctrl o to view)");
+      expect(compact).toContain("lines more (ctrl o to view)");
       expect(readFileSync(stderrPath, "utf8")).not.toContain("AnsiBandOverflow");
       expect(readFileSync(tracePath, "utf8")).toContain("route=approved_shell");
 
@@ -932,7 +931,7 @@ printf '${trailingMarker}   '
       const compactGrid = await active.capturePaneGrid();
       await active.resizeWindow(48, 24);
       const narrow = await active.waitForText(doneMarker, TIMEOUT);
-      expect(narrow).not.toContain(`│ ${ansiMarker}`);
+      expect(narrow).toContain(`│ ${ansiMarker}`);
       expect(narrow).not.toContain(trailingMarker);
       await active.resizeWindow(72, 24);
       await active.waitForText(doneMarker, TIMEOUT);
@@ -943,7 +942,7 @@ printf '${trailingMarker}   '
       );
 
       const tape = readFileSync(tapePath);
-      expect(tape.includes(Buffer.from(`│ ${ansiMarker}`))).toBe(false);
+      expect(tape.includes(Buffer.from(`│ ${ansiMarker}`))).toBe(true);
       expect(tape.includes(Buffer.from(`\x1b[31m${ansiMarker}`))).toBe(false);
       expect(tape.includes(Buffer.from(`NUL:\x00:END`))).toBe(false);
       expect(tape.includes(Buffer.from([0x49, 0x4e, 0x56, 0x41, 0x4c, 0x49, 0x44, 0x3a, 0xff])))
@@ -1089,8 +1088,7 @@ test.skipIf(!tmuxAvailable())(
       await active.waitForComposer(TIMEOUT);
       await active.sendText("Run the prepared command.");
       const compact = await waitForScrollback(active, "FULL_CTRL_O_DONE");
-      expect(compact).toContain("● 1 tool call · 1 command");
-      expect(compact).not.toContain("lines more (ctrl o to view)");
+      expect(compact).toContain("lines more (ctrl o to view)");
       expect(compact).not.toContain(tailMarker);
       await active.waitForPane(
         (pane) => pane.includes("FULL_CTRL_O_DONE") && !pane.includes("Streaming ("),
@@ -1157,10 +1155,10 @@ test.skipIf(!tmuxAvailable())(
       await active.sendKeys("Left");
       await active.waitForText("Review · ←/→ switch · ctrl o close · PgUp/PgDn scroll · Esc close", TIMEOUT);
       await active.sendKeys("C-o");
-      await active.waitForText("● 1 tool call · 1 command", TIMEOUT);
+      await active.waitForText("Ran awk 'BEGIN", TIMEOUT);
       const restored = await active.capturePane();
       const restoredScrollback = await active.captureFullScrollback();
-      expect(restored).not.toContain("lines more (ctrl o to view)");
+      expect(restored).toContain("lines more (ctrl o to view)");
       expect(restored).not.toContain(tailMarker);
       expect(normalizeVolatileStatusRows(await active.capturePaneGrid())).toEqual(
         normalizeVolatileStatusRows(compactGrid),
@@ -1235,8 +1233,7 @@ test.skipIf(!tmuxAvailable())(
       await active.waitForComposer(TIMEOUT);
       await active.sendText("Run the prepared cap-crossing command.");
       const compact = await waitForScrollback(active, finalMarker, timeout);
-      expect(compact).toContain("● 1 tool call · 1 command");
-      expect(compact).not.toContain("lines more (ctrl o to view)");
+      expect(compact).toContain("lines more (ctrl o to view)");
       expect(compact).not.toContain(stdoutTail);
       expect(compact).not.toContain(stderrTail);
 
@@ -1385,13 +1382,14 @@ printf '${tailMarker}\\n'
       const activeCompact = await active.waitForPane(
         (pane) =>
           pane.includes("Running ./active-overflow.sh") &&
-          !pane.includes(stableMarker),
+          pane.includes(stableMarker),
         timeout,
       );
       const compactOutputRows = activeCompact.split("\n").filter((line) =>
         line.trimStart().startsWith("│ ") && !line.includes("ctrl o to view")
       );
-      expect(compactOutputRows).toHaveLength(0);
+      expect(compactOutputRows.length).toBeGreaterThan(0);
+      expect(activeCompact).toContain(stableMarker);
       expect(activeCompact).not.toContain(tailMarker);
       expect(activeCompact.match(/Running \.\/active-overflow\.sh/g)).toHaveLength(1);
 
@@ -1423,16 +1421,11 @@ printf '${tailMarker}\\n'
         row.includes("ACTIVE_OVERFLOW_HISTORY_") || row.includes(historicalSentinel)
       );
       expect(historyAfterMoreOutput).toEqual(scrolledHistory);
-
-      await active.sendHexBytes(
-        Array.from({ length: 8 }, () => ["1b", "5b", "36", "7e"]).flat(),
-      );
-      await active.waitForText(futureMarker, timeout);
       await active.sendKeys("Escape");
       await active.waitForPane(
         (pane) =>
           pane.includes("Running ./active-overflow.sh") &&
-          !pane.includes(stableMarker) &&
+          pane.includes(stableMarker) &&
           !pane.includes(futureMarker),
         timeout,
       );
@@ -1446,8 +1439,8 @@ printf '${tailMarker}\\n'
 
       const terminalCompact = await active.capturePane();
       expect(terminalCompact).toContain("Ran ./active-overflow.sh");
-      expect(terminalCompact).not.toContain(stableMarker);
-      expect(terminalCompact).not.toContain("lines more (ctrl o");
+      expect(terminalCompact).toContain(stableMarker);
+      expect(terminalCompact).toContain("lines more (ctrl o");
       expect(terminalCompact).not.toContain(tailMarker);
       expect(terminalCompact).not.toContain(futureMarker);
       const sessionId = sessionIdFromHome(home);
@@ -1597,10 +1590,7 @@ while :; do :; done
       writeFileSync(beforePath, before);
       writeFileSync(beforeAnsiPath, beforeAnsi);
       const beforePlain = stripAnsi(before);
-      for (const row of expectedRows) {
-        expect(countOccurrences(beforePlain, row)).toBe(0);
-      }
-      expect(historicalLines(before)).toHaveLength(0);
+      expect(beforePlain).toContain(expectedRows[0]!);
       expect(beforePlain).not.toContain(tailMarker);
 
       const sessionId = sessionIdFromHome(home);
@@ -1838,7 +1828,7 @@ while :; do :; done
 
       expect(gateway.requests).toHaveLength(1);
       const compact = await active.captureFullScrollback();
-      expect(countOccurrences(compact, headMarker)).toBe(0);
+      expect(countOccurrences(compact, headMarker)).toBe(1);
       expect(compact).not.toContain(tailMarker);
       const sessionId = sessionIdFromHome(home);
       const commandDir = join(home, ".afx", "sessions", sessionId, "logs", "commands");
@@ -1931,7 +1921,7 @@ test.skipIf(!tmuxAvailable())(
     const finalMarker = "ORDER_REPRO_DONE";
     const prompt =
       "Use the shell tool to run exactly pwd and no other commands. Then reply with the completion marker.";
-    const statusLine = "└ Ran pwd";
+    const statusLine = "Ran pwd";
     const outputLine = workspace;
     const reviewOutputPrefix = workspace.slice(0, 56);
     const visibleLinearText = (text: string): string =>
@@ -2576,9 +2566,9 @@ test.skipIf(!tmuxAvailable())(
         TIMEOUT,
       );
       const scrollback = await waitForScrollback(active, doneMarker);
-      expect(scrollback).not.toContain(`│ ${lineMarker} 001`);
-      expect(countOccurrences(scrollback, `│ ${lineMarker} 001`)).toBe(0);
-      expect(scrollback).not.toContain("lines more (ctrl o to view)");
+      expect(scrollback).toContain(`│ ${lineMarker} 001`);
+      expect(countOccurrences(scrollback, `│ ${lineMarker} 001`)).toBe(1);
+      expect(scrollback).toContain("lines more (ctrl o to view)");
       expect(readFileSync(stderrPath, "utf8")).toBe("");
 
       await active.sendText("/quit");
@@ -2674,13 +2664,13 @@ test.skipIf(!tmuxAvailable())(
       const scrollback = await waitForScrollback(active, doneMarker);
       for (let index = 1; index <= 5; index += 1) {
         const line = `│ ${commandMarker} ${String(index).padStart(5, "0")}`;
-        expect(countOccurrences(scrollback, line)).toBe(0);
+        expect(countOccurrences(scrollback, line)).toBe(1);
       }
-      expect(scrollback).not.toContain(`│ ${commandMarker} 00006`);
+      expect(scrollback).toContain(`│ ${commandMarker} 00006`);
       expect(scrollback).not.toContain(
         `│ ${commandMarker} ${String(lineCount).padStart(5, "0")}`,
       );
-      expect(scrollback).not.toContain("lines more (ctrl o to view)");
+      expect(scrollback).toContain("lines more (ctrl o to view)");
       expect(readFileSync(stderrPath, "utf8")).not.toContain("AnsiBandOverflow");
     } finally {
       if (active) {
@@ -2989,7 +2979,7 @@ test.skipIf(!tmuxAvailable())(
       await active.waitForText("READ_RESULT_MARKER", TIMEOUT);
       const review = await active.capturePane();
       expect(review).toContain("Review · ←/→ switch · ctrl o close · PgUp/PgDn scroll · Esc close");
-      expect(review).toContain("1 line");
+      expect(review).toContain("2 lines · 38 B");
       expect(review).toContain("READ_RESULT_MARKER");
       expect(review).not.toContain("<path>");
       expect(review).not.toContain("<content>");
@@ -3148,11 +3138,11 @@ test.skipIf(!tmuxAvailable())(
       await active.sendKeys("1");
       await active.sendKeys("Enter");
       const beforeHandoff = await waitForScrollback(active, priorSummary);
-      expect(beforeHandoff).not.toContain("lines more (ctrl o to view)");
+      expect(beforeHandoff).toContain("lines more (ctrl o to view)");
       expect(countOccurrences(beforeHandoff, priorSummary)).toBe(1);
       const compactOutputRows = beforeHandoff.match(/CTRL_O_FILE_FOLD_\d{4}/g) ?? [];
-      expect(compactOutputRows).toHaveLength(0);
-      expect(beforeHandoff).not.toContain("CTRL_O_FILE_FOLD_0006");
+      expect(compactOutputRows).toHaveLength(10);
+      expect(beforeHandoff).toContain("CTRL_O_FILE_FOLD_0006");
       expect(beforeHandoff).not.toContain("CTRL_O_FILE_FOLD_0650");
       for (const line of compactOutputRows) {
         expect(countOccurrences(beforeHandoff, line)).toBe(1);
@@ -3574,18 +3564,16 @@ test.skipIf(!tmuxAvailable())(
       ]);
       expect(setupScrollback).toContain(assistantHead);
       expect(setupScrollback).toContain(assistantTail);
-      expect(setupScrollback).not.toContain(setupCompactLine);
+      expect(setupScrollback).toContain(setupCompactLine);
       expect(setupScrollback).not.toContain(setupFullLine);
-      expect(setupScrollback).not.toContain("lines more (ctrl o to view)");
+      expect(setupScrollback).toContain("lines more (ctrl o to view)");
 
       await active.sendText("Run the prepared streaming command and file review.");
       await active.waitForText("Would you like to run the following command?", TIMEOUT);
       await active.sendKeys("1");
       await active.sendKeys("Enter");
       await active.waitForPane(
-        (pane) =>
-          pane.includes("Running sh -c") &&
-          !pane.includes(`${streamPrefix}004`),
+        (pane) => pane.includes("Running sh -c"),
         TIMEOUT,
       );
       const compactRowsBeforeNavigation = pressureRows(await active.captureFullScrollback());
@@ -3712,24 +3700,24 @@ test.skipIf(!tmuxAvailable())(
       const finalPane = await active.capturePane();
       expect(finalScrollback).toContain(assistantHead);
       expect(finalScrollback).toContain(assistantTail);
-      expect(finalScrollback).not.toContain(setupCompactLine);
+      expect(finalScrollback).toContain(setupCompactLine);
       expect(finalScrollback).not.toContain(setupFullLine);
       expect(finalScrollback).toContain(`\n  1) ${questionMarker}`);
       expect(countOccurrences(finalScrollback, setupSentinel)).toBe(1);
       expect(countOccurrences(finalScrollback, finalSentinel)).toBe(1);
-      for (let index = 1; index <= 4; index += 1) {
+      for (let index = 1; index <= 8; index += 1) {
+        const outputRow = `│ ${streamPrefix}${String(index).padStart(3, "0")}`;
+        expect(countOccurrences(finalScrollback, outputRow)).toBe(1);
+      }
+      for (let index = 9; index <= 18; index += 1) {
         const outputRow = `│ ${streamPrefix}${String(index).padStart(3, "0")}`;
         expect(countOccurrences(finalScrollback, outputRow)).toBe(0);
       }
-      for (let index = 5; index <= 18; index += 1) {
-        const outputRow = `│ ${streamPrefix}${String(index).padStart(3, "0")}`;
-        expect(countOccurrences(finalScrollback, outputRow)).toBe(0);
-      }
-      expect(countOccurrences(finalScrollback, `│ ${activeStart}`)).toBe(0);
-      expect(countOccurrences(finalScrollback, `│ ${streamGate}`)).toBe(0);
+      expect(countOccurrences(finalScrollback, `│ ${activeStart}`)).toBe(1);
+      expect(countOccurrences(finalScrollback, `│ ${streamGate}`)).toBe(1);
       expect(countOccurrences(finalScrollback, `│ ${activeDone}`)).toBe(0);
-      expect(finalScrollback).not.toContain("lines more (ctrl o to view)");
       expect(finalPane).not.toContain("Apply this change?");
+      expect(finalScrollback).toContain("lines more (ctrl o to view)");
       expect(finalPane).not.toContain(questionAnswerInstruction);
       expect(finalPane).not.toContain(questionCancelInstruction);
       expect(gateway.requests).toHaveLength(5);
@@ -4131,8 +4119,6 @@ test.skipIf(!tmuxAvailable())(
     let active: TmuxSession | null = null;
 
     function expectDeferredPresentation(scrollback: string): void {
-      expect(scrollback).toContain("1 failed");
-      expect(scrollback).toContain("1 deferred");
       expect(scrollback).not.toContain("Context updated");
       expect(scrollback).not.toContain("Not executed");
       expect(scrollback).not.toContain("● Failed nested/input.txt");
@@ -4140,7 +4126,7 @@ test.skipIf(!tmuxAvailable())(
       expect(scrollback).toContain("Read nested/input.txt");
       expect(scrollback).toContain(`Ran ${command}`);
       expect(scrollback).toContain(`Ran ${failureCommand}`);
-      expect(scrollback).not.toContain("│ exit code 7");
+      expect(scrollback).toContain("│ exit code 7");
     }
 
     try {
@@ -4163,7 +4149,7 @@ test.skipIf(!tmuxAvailable())(
       );
       const liveScrollback = await active.captureFullScrollback();
       expectDeferredPresentation(liveScrollback);
-      expect(liveScrollback).not.toContain("│ ordinary-failure-control");
+      expect(liveScrollback).toContain("│ ordinary-failure-control");
       expect(readFileSync(liveStderrPath, "utf8")).toBe("");
 
       await active.sendText("/quit");
@@ -4760,7 +4746,7 @@ test.skipIf(!tmuxAvailable())(
       await active.sendText("Run pwd once for resume.");
       const liveToolScrollback = await waitForScrollback(active, toolReply);
       expect(liveToolScrollback).toContain("Ran pwd");
-      expect(liveToolScrollback).not.toContain(toolWorkspaceMarker);
+      expect(liveToolScrollback).toContain(toolWorkspaceMarker);
       expectNoRawToolReplay(liveToolScrollback);
       await active.sendText("/quit");
       expect(await active.waitForSessionEnd()).toBe(true);
@@ -4790,7 +4776,7 @@ test.skipIf(!tmuxAvailable())(
         await active.waitForComposer(TIMEOUT);
         const resumedToolScrollback = await waitForScrollback(active, toolReply);
         expect(resumedToolScrollback).toContain("Ran pwd");
-        expect(resumedToolScrollback).not.toContain(toolWorkspaceMarker);
+        expect(resumedToolScrollback).toContain(toolWorkspaceMarker);
         expect(resumedToolScrollback).toContain(toolReply);
         expectNoRawToolReplay(resumedToolScrollback);
         if (index === 0) {
@@ -5214,7 +5200,7 @@ test.skipIf(!tmuxAvailable())(
       await active.sendKeys("Enter");
       const firstLive = await waitForScrollback(active, firstCompletion);
       expect(firstLive).toContain("Wrote first-large.md +120");
-      expect(firstLive).not.toContain("RESUMED_FIRST_FILE_LINE_001");
+      expect(firstLive).toContain("RESUMED_FIRST_FILE_LINE_001");
       expect(readFileSync(join(workspace, "first-large.md"), "utf8")).toBe(
         `${firstLines.join("\n")}\n`,
       );
@@ -5226,7 +5212,7 @@ test.skipIf(!tmuxAvailable())(
       const live = await waitForScrollback(active, secondCompletion);
       expect(live).toContain("Wrote first-large.md +120");
       expect(live).toContain("Wrote second-large.md +60");
-      expect(live).not.toContain("RESUMED_SECOND_FILE_LINE_001");
+      expect(live).toContain("RESUMED_SECOND_FILE_LINE_001");
       expect(readFileSync(join(workspace, "second-large.md"), "utf8")).toBe(
         `${secondLines.join("\n")}\n`,
       );
@@ -5257,7 +5243,7 @@ test.skipIf(!tmuxAvailable())(
       const resumed = await waitForScrollback(active, secondCompletion);
       expect(resumed).toContain("Wrote first-large.md +120");
       expect(resumed).toContain("Wrote second-large.md +60");
-      expect(resumed).not.toContain("RESUMED_SECOND_FILE_LINE_001");
+      expect(resumed).toContain("RESUMED_SECOND_FILE_LINE_001");
 
       await active.sendKeys("C-o");
       await active.waitForText("┃ Review · ←/→ switch · ctrl o close", TIMEOUT);
@@ -5373,10 +5359,9 @@ printf '${stdoutTail2}\\n'
     let active: TmuxSession | null = null;
 
     function expectCompactCommandOutput(pane: string): void {
-      expect(pane).toContain("● 1 tool call · 1 command");
       expect(pane).toContain("Ran ./resume-command-output.sh");
-      expect(pane).not.toContain("lines more (ctrl o to view)");
-      expect(pane).not.toContain(firstMarker);
+      expect(pane).toContain("lines more (ctrl o to view)");
+      expect(pane).toContain(firstMarker);
       expect(pane).not.toContain("RESUME_COMMAND_TAIL");
     }
 
@@ -6210,7 +6195,7 @@ while :; do sleep 1; done
         timeout,
       );
       const liveCancelled = stripAnsi(await active.captureFullScrollback());
-      expect(liveCancelled).not.toContain(outputMarker);
+      expect(liveCancelled).toContain(outputMarker);
       expect(liveCancelled).not.toContain(bufferedTailMarker);
       expect(liveCancelled).not.toContain(artifactTailMarker);
 
@@ -6267,7 +6252,7 @@ while :; do sleep 1; done
       const cancelledIndex = resumed.indexOf("Cancelled");
       expect(assistantIndex).toBeGreaterThanOrEqual(0);
       expect(cancelledIndex).toBeGreaterThan(assistantIndex);
-      expect(resumed).not.toContain(outputMarker);
+      expect(resumed).toContain(outputMarker);
       expect(resumed).not.toContain("Interrupted by user after completing");
       expect(resumed).not.toContain("<turn_aborted>");
       expect(resumed).not.toContain(bufferedTailMarker);

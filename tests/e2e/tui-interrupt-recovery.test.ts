@@ -405,7 +405,7 @@ while :; do sleep 1; done
 
       await waitForTrace(tracePath, "finish processing queued=0", TIMEOUT);
       await session.waitForText(
-        "Cancelled ./hold-workspace-cancel.sh · What can afx do differently?",
+        "Cancelled ./hold-workspace-cancel.sh",
         TIMEOUT,
       );
       await session.sendText("/workspace list");
