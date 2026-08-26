@@ -1047,7 +1047,7 @@ describe.skipIf(!tmuxAvailable())("tui: file permissions", () => {
       const cases = [
         {
           name: "denied",
-          outcome: "1 denied",
+          outcome: "marker denied complete",
           resolve: async (session: TmuxSession) => {
             await decide(session, 3);
           },
@@ -1061,7 +1061,7 @@ describe.skipIf(!tmuxAvailable())("tui: file permissions", () => {
         },
         {
           name: "cancelled",
-          outcome: "■ Cancelled",
+          outcome: "Cancelled file",
           resolve: async (session: TmuxSession) => {
             await session.sendKeys("Escape");
           },

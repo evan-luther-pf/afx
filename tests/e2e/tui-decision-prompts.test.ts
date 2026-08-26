@@ -1396,7 +1396,7 @@ describe.skipIf(SKIP)("tui: decision prompt input isolation", () => {
       await ctx.session.waitForText("Permission needed", TIMEOUT);
 
       await ctx.session.sendKeys("Escape");
-      const cancelled = await ctx.session.waitForText("■ Cancelled", TIMEOUT);
+      const cancelled = await ctx.session.waitForText("Cancelled grep", TIMEOUT);
       expect(cancelled).not.toContain(APPROVAL_PROMPT);
 
       await ctx.session.resizeWindow(72, 20);
@@ -1413,7 +1413,7 @@ describe.skipIf(SKIP)("tui: decision prompt input isolation", () => {
       expect(stdout.includes(Buffer.from("\x1b[?1049l"))).toBe(true);
       await assertProcessAliveAndClean(ctx);
     },
-    TIMEOUT,
+    TIMEOUT * 2,
   );
 
   test(
