@@ -1647,6 +1647,8 @@ fn writeAfxExtensionsSnapshot(
         try writeJsonStr(skill_runtime.skillGroupLabel(skill.source), &skills_json.writer);
         try skills_json.writer.writeAll(",\"managed\":");
         try skills_json.writer.writeAll(if (skill_runtime.isManagedInstallSkill(skill)) "true" else "false");
+        try skills_json.writer.writeAll(",\"enabled\":");
+        try skills_json.writer.writeAll(if (state.skills.isEnabled(skill.name)) "true" else "false");
         try skills_json.writer.writeByte('}');
     }
     try skills_json.writer.writeByte(']');
@@ -1749,22 +1751,37 @@ fn handleAfxCommandExecute(
         try out.writer.writeAll(",\"restartRequired\":\"true\"}}");
     } else if (std.mem.eql(u8, command, "skill-manage")) {
         const raw = try requiredStringArgument(state, alloc, msg.id, arguments, "raw") orelse return;
-        const parsed_command = builtin_skills.command_provider.parseCommand(raw);
-        var result = builtin_skills.command_provider.executeCommand(alloc, parsed_command, .{
-            .skills_dir = state.skills.dir,
-            .find_ctx = @ptrCast(state),
-            .find_skill = findAcpSkill,
-        }) catch return state.writer.writeError(alloc, msg.id, .{
-            .code = ErrorCode.invalid_request,
-            .message = "Skill action failed",
-        });
-        defer result.deinit(alloc);
-        switch (result) {
-            .notice => |notice| if (notice.reload) try reloadAcpSkills(state, alloc),
-            .installed => try reloadAcpSkills(state, alloc),
-            .open_menu, .focus_menu => {},
+        var words = std.mem.tokenizeAny(u8, raw, " \t\r\n");
+        const action = words.next() orelse "";
+        const name = words.next();
+        var changed = false;
+        if ((std.mem.eql(u8, action, "enable") or std.mem.eql(u8, action, "disable")) and name != null) {
+            changed = try state.skills.setEnabled(
+                alloc,
+                name.?,
+                std.mem.eql(u8, action, "enable"),
+            );
+        } else {
+            const parsed_command = builtin_skills.command_provider.parseCommand(raw);
+            var result = builtin_skills.command_provider.executeCommand(alloc, parsed_command, .{
+                .skills_dir = state.skills.dir,
+                .find_ctx = @ptrCast(state),
+                .find_skill = findAcpSkill,
+            }) catch return state.writer.writeError(alloc, msg.id, .{
+                .code = ErrorCode.invalid_request,
+                .message = "Skill action failed",
+            });
+            defer result.deinit(alloc);
+            switch (result) {
+                .notice => |notice| if (notice.reload) try reloadAcpSkills(state, alloc),
+                .installed => try reloadAcpSkills(state, alloc),
+                .open_menu, .focus_menu => {},
+            }
+            changed = true;
         }
-        try out.writer.writeAll("{\"kind\":\"state_change\",\"title\":\"Skills\",\"fields\":{\"changed\":\"true\"}}");
+        try out.writer.writeAll("{\"kind\":\"state_change\",\"title\":\"Skills\",\"fields\":{\"changed\":");
+        try out.writer.writeAll(if (changed) "\"true\"" else "\"false\"");
+        try out.writer.writeAll("}}");
     } else if (std.mem.eql(u8, command, "plan")) {
         const active = if (state.active_session) |*value| value else return state.writer.writeError(alloc, msg.id, .{
             .code = ErrorCode.invalid_request,

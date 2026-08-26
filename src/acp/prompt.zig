@@ -647,6 +647,8 @@ pub fn handlePrompt(
     });
     defer tool_projection.deinit(alloc);
 
+    const enabled_skills = try state.skills.enabledItems(alloc);
+    defer alloc.free(enabled_skills);
     var bounded_skills = try state.skills.buildBoundedSystemPromptSection(alloc, state.context_limits);
     defer bounded_skills.deinit(alloc);
     if (bounded_skills.notice) |notice| try pushContextNotice(@ptrCast(&ctx), notice);
@@ -661,7 +663,7 @@ pub fn handlePrompt(
     defer alloc.free(owned_prompt);
     var explicit_skills = try skill_invocation.buildExplicitPromptSection(
         alloc,
-        .{ .skills = state.skills.items, .diagnostics = state.skills.diagnostics },
+        .{ .skills = enabled_skills, .diagnostics = state.skills.diagnostics },
         owned_prompt,
         &.{},
         state.context_limits,
@@ -792,6 +794,8 @@ pub fn runSubagentChild(
         },
     ) catch return error.OutOfMemory;
     defer child_projection.deinit(alloc);
+    const enabled_skills = state.skills.enabledItems(alloc) catch return error.OutOfMemory;
+    defer alloc.free(enabled_skills);
     var bounded_skills = state.skills.buildBoundedSystemPromptSection(
         alloc,
         state.context_limits,
@@ -799,7 +803,7 @@ pub fn runSubagentChild(
     defer bounded_skills.deinit(alloc);
     var explicit_skills = skill_invocation.buildExplicitPromptSection(
         alloc,
-        .{ .skills = state.skills.items, .diagnostics = state.skills.diagnostics },
+        .{ .skills = enabled_skills, .diagnostics = state.skills.diagnostics },
         message.content,
         &.{},
         state.context_limits,

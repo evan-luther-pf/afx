@@ -36,7 +36,7 @@ Background and child-agent activity use the typed `activity` command result. The
 
 `/tree` reads the active session's durable branch index into a native hierarchy. `/plan` changes the active ACP mode and restores the preceding mode when disabled. `/continue` sends the ACP recovery metadata on an empty prompt. `/handoff` uses the ACP session compaction path.
 
-MCP and skill inventory use the typed `extensions` result. MCP add, remove, enable, and disable mutate the profile configuration through afx's canonical MCP config implementation. Managed skills install and remove through the canonical skill command provider, followed by in-process discovery refresh.
+MCP and skill inventory use the typed `extensions` result. MCP add, remove, enable, and disable mutate the profile configuration through afx's canonical MCP config implementation. Managed skills install and remove through the canonical skill command provider, followed by in-process discovery refresh. Skill enablement is scoped to the ACP process and filters both parent and child prompt catalogs immediately without mutating external skill directories.
 
 ## GUI routing
 
