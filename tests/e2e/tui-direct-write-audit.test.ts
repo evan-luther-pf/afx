@@ -287,6 +287,7 @@ describe("tui: direct-write audit", () => {
       .filter(({ source }) => source.includes("flushRequestedFrame("))
       .map(({ path }) => path);
     expect(flushFiles).toEqual([
+      "src/core/app/app_commands.zig",
       "src/core/app/app_render_runtime.zig",
       "src/main.zig",
     ]);

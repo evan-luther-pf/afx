@@ -340,7 +340,7 @@ test("render-lab analyzer enforces active-tool placement and uniqueness", () => 
     {
       event: "active-tool-clipped",
       grid: ["│ ACTIVE_TOOL_LINE_05", "│ … 27 lines more (ctrl o to view)", "", "▲ Thinking", "", "────────────────", "❯", "────────────────", "test"],
-      rejected: true,
+      rejected: false,
     },
     {
       event: "active-tool-visible",

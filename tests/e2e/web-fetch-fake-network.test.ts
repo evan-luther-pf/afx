@@ -185,7 +185,7 @@ function expectWebFetchSchema(request: GatewayRequest) {
   expect(schema?.inputSchema.type).toBe("object");
   expect(schema?.inputSchema.properties.url.type).toBe("string");
   expect(schema?.inputSchema.properties.prompt).toBeUndefined();
-  expect(schema?.inputSchema.required).toEqual(["url"]);
+  expect(schema?.inputSchema.required).toEqual(["i", "url"]);
   expect(schema?.inputSchema.additionalProperties).toBe(false);
 }
 
