@@ -574,19 +574,25 @@ pub fn handlePrompt(
                 .message = "Image prompt blocks are unavailable in this host",
             } };
         }
-        if (session.image_snapshot_temp_dir == null) {
-            session.image_snapshot_temp_dir = image_attachments.createTempSnapshotDir(
-                alloc,
-            ) catch return .{ .rpc_error = .{
-                .code = ErrorCode.internal_error,
-                .message = "Failed to prepare image attachments",
-            } };
-        }
+        const durable_sessions_dir: ?[]const u8 = if (session.store) |store|
+            store.sessions_dir
+        else
+            null;
+        const snapshot_dir = session_store.imageSnapshotStorageDir(
+            alloc,
+            durable_sessions_dir,
+            if (durable_sessions_dir != null) session.session_id else null,
+            &session.image_snapshot_temp_dir,
+        ) catch return .{ .rpc_error = .{
+            .code = ErrorCode.internal_error,
+            .message = "Failed to prepare image attachments",
+        } };
+        defer alloc.free(snapshot_dir);
         for (prompt_input.images) |*image| {
             image_attachments.captureImageSnapshot(
                 alloc,
                 image,
-                session.image_snapshot_temp_dir.?,
+                snapshot_dir,
             ) catch return .{ .rpc_error = .{
                 .code = ErrorCode.invalid_params,
                 .message = "Image attachment could not be prepared",
