@@ -5695,8 +5695,8 @@ describe.skipIf(!tmuxAvailable())("TUI gateway stream lifecycle", () => {
       expect(compact).not.toContain(`Running ${unsupportedToolName}`);
 
       await session.resizeWindow(72, 24);
-      const resized = await session.waitForText(failedRow, TIMEOUT);
-      expect(resized).toContain(`Failed ${unsupportedToolName}`);
+      const resized = await session.waitForText(finalText, TIMEOUT);
+      expect(resized).toContain(`Unsupported tool: ${unsupportedToolName}`);
       expect(resized).toContain(`Ran ${supportedCommand}`);
 
       await session.sendKeys("C-o");
