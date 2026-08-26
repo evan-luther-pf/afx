@@ -207,18 +207,37 @@ pub fn writeToolCallDiffUpdate(
     try w.writeAll("}}}");
 }
 
-pub fn writeInitializeResponse(w: *std.Io.Writer) !void {
+pub fn writeInitializeResponse(
+    w: *std.Io.Writer,
+    config_options_json: ?[]const u8,
+    available_commands_json: ?[]const u8,
+) !void {
     try w.writeAll("{\"protocolVersion\":");
     try w.print("{d}", .{protocol_version});
     try w.writeAll(",\"agentCapabilities\":{");
     try w.writeAll("\"loadSession\":true,");
-    try w.writeAll("\"promptCapabilities\":{\"image\":false,\"audio\":false,\"embeddedContext\":true},");
+    try w.writeAll("\"promptCapabilities\":{\"image\":true,\"audio\":false,\"embeddedContext\":true},");
     try w.writeAll("\"mcpCapabilities\":{\"http\":true,\"sse\":true},");
     try w.writeAll("\"sessionCapabilities\":{\"list\":{},\"resume\":{},\"close\":{}}");
     try w.writeAll("},\"agentInfo\":{\"name\":\"afx\",\"title\":\"afx\",\"version\":");
     try writeJsonStr(build_options.app_version, w);
-    try w.writeAll("},");
-    try w.writeAll("\"authMethods\":[]}");
+    try w.writeAll("},\"authMethods\":[]");
+    if (config_options_json != null or available_commands_json != null) {
+        try w.writeAll(",\"_meta\":{\"afx\":{");
+        var wrote_field = false;
+        if (config_options_json) |config_options| {
+            try w.writeAll("\"configOptions\":");
+            try w.writeAll(config_options);
+            wrote_field = true;
+        }
+        if (available_commands_json) |available_commands| {
+            if (wrote_field) try w.writeAll(",");
+            try w.writeAll("\"availableCommands\":");
+            try w.writeAll(available_commands);
+        }
+        try w.writeAll("}}");
+    }
+    try w.writeAll("}");
 }
 
 pub fn writePromptResponse(w: *std.Io.Writer, reason: StopReason) !void {
@@ -344,7 +363,7 @@ test "writeInitializeResponse contains required fields" {
     const alloc = std.testing.allocator;
     var out: std.Io.Writer.Allocating = .init(alloc);
     defer out.deinit();
-    try writeInitializeResponse(&out.writer);
+    try writeInitializeResponse(&out.writer, "[{\"id\":\"model\"}]", "[{\"name\":\"help\"}]");
     var parsed = try std.json.parseFromSlice(std.json.Value, alloc, out.writer.buffered(), .{});
     defer parsed.deinit();
 
@@ -357,12 +376,21 @@ test "writeInitializeResponse contains required fields" {
         build_options.app_version,
         parsed.value.object.get("agentInfo").?.object.get("version").?.string,
     );
-    try std.testing.expect(std.mem.find(u8, out.writer.buffered(), "\"image\":false") != null);
+    try std.testing.expect(std.mem.find(u8, out.writer.buffered(), "\"image\":true") != null);
     try std.testing.expect(std.mem.find(u8, out.writer.buffered(), "\"list\":{}") != null);
     try std.testing.expect(std.mem.find(u8, out.writer.buffered(), "\"resume\":{}") != null);
     try std.testing.expect(std.mem.find(u8, out.writer.buffered(), "\"close\":{}") != null);
     try std.testing.expect(mcp_capabilities.get("http").?.bool);
     try std.testing.expect(mcp_capabilities.get("sse").?.bool);
+    const metadata = parsed.value.object.get("_meta").?.object.get("afx").?.object;
+    try std.testing.expectEqualStrings(
+        "model",
+        metadata.get("configOptions").?.array.items[0].object.get("id").?.string,
+    );
+    try std.testing.expectEqualStrings(
+        "help",
+        metadata.get("availableCommands").?.array.items[0].object.get("name").?.string,
+    );
 }
 
 test "writeUserMessageChunk produces valid json" {

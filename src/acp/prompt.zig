@@ -7,6 +7,7 @@ const model_provider = @import("../core/config/model_provider.zig");
 const host = @import("../core/hosts/host.zig");
 const host_target = @import("../core/hosts/target.zig");
 const io_mod = @import("../core/shared/io.zig");
+const image_attachments = @import("../core/images/image_attachments.zig");
 const jsonrpc = @import("jsonrpc.zig");
 const acp_types = @import("types.zig");
 const server = @import("server.zig");
@@ -456,6 +457,59 @@ fn appendMarkdownLinkClose(alloc: Allocator, out: *std.ArrayList(u8), uri: []con
     try out.append(alloc, ')');
 }
 
+fn handleSlashCommand(
+    state: *server.ServerState,
+    alloc: Allocator,
+    text: []const u8,
+    captured_mode: []const u8,
+    captured_permission_mode: PermissionMode,
+) !?TerminalOutcome {
+    const command = std.mem.trim(u8, text, " \t\r\n");
+    const session = if (state.active_session) |*active| active else return null;
+    var ctx = AcpContext{
+        .alloc = alloc,
+        .state = state,
+        .session_id = session.session_id,
+        .captured_mode = captured_mode,
+        .captured_permission_mode = captured_permission_mode,
+    };
+
+    if (std.mem.eql(u8, command, "/help")) {
+        try ctx.sendAgentText(
+            "## Commands\n\n" ++
+                "- `/new` — Start a fresh session\n" ++
+                "- `/clear` — Start a fresh session\n" ++
+                "- `/reset` — Reset session context\n" ++
+                "- `/status` — Show current session status\n" ++
+                "- `/permissions` — Show permission mode",
+        );
+    } else if (std.mem.eql(u8, command, "/status")) {
+        const status = try std.fmt.allocPrint(
+            alloc,
+            "## Status\n\n- Model: `{s}`\n- Mode: `{s}`\n- Permissions: `{s}`",
+            .{ session.model, captured_mode, @tagName(captured_permission_mode) },
+        );
+        defer alloc.free(status);
+        try ctx.sendAgentText(status);
+    } else if (std.mem.eql(u8, command, "/permissions")) {
+        const status = try std.fmt.allocPrint(
+            alloc,
+            "Permission mode: `{s}`",
+            .{@tagName(captured_permission_mode)},
+        );
+        defer alloc.free(status);
+        try ctx.sendAgentText(status);
+    } else if (std.mem.eql(u8, command, "/clear") or
+        std.mem.eql(u8, command, "/reset"))
+    {
+        session.session_rt.reset(alloc);
+        try ctx.sendAgentText("Session context reset.");
+    } else {
+        return null;
+    }
+    return .{ .stop_reason = .end_turn };
+}
+
 /// Runs a prompt turn under the mode and permission policy captured at
 /// dispatch. Mid-turn session/set_mode changes only affect later prompts.
 pub fn handlePrompt(
@@ -502,7 +556,7 @@ pub fn handlePrompt(
             },
         };
     }
-    if (!prompt_input.continue_recovery and prompt_text.len == 0) {
+    if (!prompt_input.continue_recovery and prompt_text.len == 0 and prompt_input.images.len == 0) {
         return .{
             .rpc_error = .{
                 .code = ErrorCode.invalid_params,
@@ -510,6 +564,41 @@ pub fn handlePrompt(
             },
         };
     }
+
+    if (prompt_input.images.len > 0) {
+        if (comptime host_target.is_wasm) {
+            return .{ .rpc_error = .{
+                .code = ErrorCode.invalid_params,
+                .message = "Image prompt blocks are unavailable in this host",
+            } };
+        }
+        if (session.image_snapshot_temp_dir == null) {
+            session.image_snapshot_temp_dir = image_attachments.createTempSnapshotDir(
+                alloc,
+            ) catch return .{ .rpc_error = .{
+                .code = ErrorCode.internal_error,
+                .message = "Failed to prepare image attachments",
+            } };
+        }
+        for (prompt_input.images) |*image| {
+            image_attachments.captureImageSnapshot(
+                alloc,
+                image,
+                session.image_snapshot_temp_dir.?,
+            ) catch return .{ .rpc_error = .{
+                .code = ErrorCode.invalid_params,
+                .message = "Image attachment could not be prepared",
+            } };
+        }
+    }
+
+    if (try handleSlashCommand(
+        state,
+        alloc,
+        prompt_text,
+        captured_mode,
+        captured_permission_mode,
+    )) |outcome| return outcome;
 
     try refreshProjectContext(
         state,
@@ -592,7 +681,7 @@ pub fn handlePrompt(
     );
     defer alloc.free(root_user_intent_context);
 
-    const current_images = if (recovery_checkpoint) |checkpoint| checkpoint.user.images else &.{};
+    const current_images = if (recovery_checkpoint) |checkpoint| checkpoint.user.images else prompt_input.images;
     const authorized_image_catalog = try session.session_rt.snapshotImageCatalog(alloc, current_images);
     defer types.freeImageAttachmentSlice(alloc, authorized_image_catalog);
 
@@ -802,6 +891,7 @@ fn buildAgentConfig(state: *server.ServerState, session: *server.ActiveSessionSt
 
 const ParsedPromptInput = struct {
     text: []u8,
+    images: []types.ImageAttachment = &.{},
     continue_recovery: bool = false,
     targets: []context_contract.ApplicableTarget = &.{},
     omissions: []context_contract.ContextOmissionInput = &.{},
@@ -809,6 +899,7 @@ const ParsedPromptInput = struct {
 
     fn deinit(self: *ParsedPromptInput, alloc: Allocator) void {
         alloc.free(self.text);
+        if (self.images.len > 0) types.freeImageAttachmentSlice(alloc, self.images);
         for (self.targets) |target| alloc.free(@constCast(target.path));
         if (self.targets.len > 0) alloc.free(self.targets);
         for (self.omissions) |omission| alloc.free(@constCast(omission.source));
@@ -850,6 +941,11 @@ fn parsePromptInput(alloc: Allocator, params_json: []const u8) !ParsedPromptInpu
         for (omissions.items) |omission| alloc.free(@constCast(omission.source));
         omissions.deinit(alloc);
     }
+    var images: std.ArrayList(types.ImageAttachment) = .empty;
+    defer {
+        for (images.items) |image| types.freeImageAttachment(alloc, image);
+        images.deinit(alloc);
+    }
 
     for (prompt_arr.array.items) |block| {
         if (block != .object) continue;
@@ -864,7 +960,40 @@ fn parsePromptInput(alloc: Allocator, params_json: []const u8) !ParsedPromptInpu
                 }
             }
         } else if (std.mem.eql(u8, block_type.string, "image")) {
-            return error.UnsupportedPromptImage;
+            const mime_value = block.object.get("mimeType") orelse
+                return error.UnsupportedPromptImage;
+            if (mime_value != .string or
+                !(std.mem.eql(u8, mime_value.string, "image/png") or
+                    std.mem.eql(u8, mime_value.string, "image/jpeg") or
+                    std.mem.eql(u8, mime_value.string, "image/gif") or
+                    std.mem.eql(u8, mime_value.string, "image/webp")))
+            {
+                return error.UnsupportedPromptImage;
+            }
+            const metadata = block.object.get("_meta") orelse
+                return error.UnsupportedPromptImage;
+            if (metadata != .object) return error.UnsupportedPromptImage;
+            const afx = metadata.object.get("afx") orelse
+                return error.UnsupportedPromptImage;
+            if (afx != .object) return error.UnsupportedPromptImage;
+            const path_value = afx.object.get("path") orelse
+                return error.UnsupportedPromptImage;
+            if (path_value != .string or !std.fs.path.isAbsolute(path_value.string)) {
+                return error.UnsupportedPromptImage;
+            }
+            var attachment = image_attachments.loadImageAttachment(
+                alloc,
+                path_value.string,
+            ) catch return error.UnsupportedPromptImage;
+            if (!std.mem.eql(u8, attachment.media_type, mime_value.string)) {
+                types.freeImageAttachment(alloc, attachment);
+                return error.UnsupportedPromptImage;
+            }
+            attachment.id = images.items.len + 1;
+            images.append(alloc, attachment) catch |err| {
+                types.freeImageAttachment(alloc, attachment);
+                return err;
+            };
         } else if (std.mem.eql(u8, block_type.string, "resource")) {
             if (block.object.get("resource")) |resource| {
                 if (resource == .object) {
@@ -918,6 +1047,7 @@ fn parsePromptInput(alloc: Allocator, params_json: []const u8) !ParsedPromptInpu
         .text = try alloc.dupe(u8, text_buf.items),
         .continue_recovery = continue_recovery,
     };
+    result.images = try images.toOwnedSlice(alloc);
     errdefer result.deinit(alloc);
     result.targets = try targets.toOwnedSlice(alloc);
     result.omissions = try omissions.toOwnedSlice(alloc);
@@ -2849,10 +2979,34 @@ test "parsePromptInput accepts explicit recovery continuation metadata" {
     try std.testing.expect(result.continue_recovery);
 }
 
-test "parsePromptInput rejects image blocks" {
+test "parsePromptInput rejects image blocks without local path metadata" {
     const alloc = std.testing.allocator;
     const params = "{\"sessionId\":\"s1\",\"prompt\":[{\"type\":\"text\",\"text\":\"Only text\"},{\"type\":\"image\",\"data\":\"aGVsbG8=\",\"mimeType\":\"image/png\"}]}";
     try std.testing.expectError(error.UnsupportedPromptImage, parsePromptInput(alloc, params));
+}
+
+test "parsePromptInput accepts local image path metadata" {
+    const alloc = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    {
+        var file = try tmp.dir.createFile(std.testing.io, "image.png", .{});
+        defer file.close(std.testing.io);
+        try file.writeStreamingAll(std.testing.io, &.{ 0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a });
+    }
+    const path = try io_mod.dirRealpathAlloc(alloc, tmp.dir, "image.png");
+    defer alloc.free(path);
+    const params = try std.fmt.allocPrint(
+        alloc,
+        "{{\"sessionId\":\"s1\",\"prompt\":[{{\"type\":\"image\",\"data\":\"\",\"mimeType\":\"image/png\",\"_meta\":{{\"afx\":{{\"path\":\"{s}\"}}}}}}]}}",
+        .{path},
+    );
+    defer alloc.free(params);
+    var parsed = try parsePromptInput(alloc, params);
+    defer parsed.deinit(alloc);
+    try std.testing.expectEqual(@as(usize, 1), parsed.images.len);
+    try std.testing.expectEqualStrings(path, parsed.images[0].path);
+    try std.testing.expectEqualStrings("image/png", parsed.images[0].media_type);
 }
 
 test "parsePromptInput preserves resource text and accepts only local absolute file targets" {

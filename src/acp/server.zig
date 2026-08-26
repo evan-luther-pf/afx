@@ -1,4 +1,5 @@
 const std = @import("std");
+const build_options = @import("build_options");
 const acp_runner = @import("../core/cli/acp_runner.zig");
 const config_runtime = @import("../core/config/config_runtime.zig");
 const io_mod = @import("../core/shared/io.zig");
@@ -27,6 +28,8 @@ const mcp_runtime = @import("../core/mcp/mcp_runtime.zig");
 const mode_registry = @import("../core/modes/mode_registry.zig");
 const skill_runtime = @import("../core/skills/skill_runtime.zig");
 const session_codec = @import("../core/session/session_codec.zig");
+const session_display_metadata = @import("../core/session/session_display_metadata.zig");
+const image_attachments = @import("../core/images/image_attachments.zig");
 const session_log = @import("../core/session/session_log.zig");
 const session_store = @import("../core/session/session_store.zig");
 const session_runtime = @import("../core/session/session.zig");
@@ -61,6 +64,7 @@ const AcpMethod = enum {
     session_prompt,
     session_set_config_option,
     session_set_mode,
+    afx_command_execute,
     unknown,
 
     fn parse(method: []const u8) AcpMethod {
@@ -75,6 +79,7 @@ const AcpMethod = enum {
         if (std.mem.eql(u8, method, "session/prompt")) return .session_prompt;
         if (std.mem.eql(u8, method, "session/set_config_option")) return .session_set_config_option;
         if (std.mem.eql(u8, method, "session/set_mode")) return .session_set_mode;
+        if (std.mem.eql(u8, method, "afx/command/execute")) return .afx_command_execute;
         return .unknown;
     }
 
@@ -92,6 +97,7 @@ const AcpMethod = enum {
             .session_remove,
             .session_prompt,
             .session_set_config_option,
+            .afx_command_execute,
             .unknown,
             => true,
         };
@@ -162,6 +168,7 @@ pub const ActiveSessionState = struct {
     agent_step_limit: usize,
     max_tool_result_bytes: usize,
     fast_mode: bool,
+    image_snapshot_temp_dir: ?[]u8 = null,
     effort: types.ReasoningEffort,
     first_call_tool_choice: types.ToolChoice,
     permission_mode: types.PermissionMode,
@@ -486,6 +493,10 @@ fn destroyActiveSession(state: *ServerState) void {
             runtime.deinit();
             state.alloc.destroy(runtime);
         }
+    }
+    if (active.image_snapshot_temp_dir) |path| {
+        image_attachments.cleanupSnapshotDir(path);
+        state.alloc.free(path);
     }
     active.session_rt.deinit(state.alloc);
     if (active.writable) |*writable| writable.deinit(state.alloc);
@@ -1117,6 +1128,7 @@ fn dispatch(state: *ServerState, alloc: Allocator, msg: *jsonrpc.Message) !void 
             .session_prompt => startPrompt(state, alloc, msg),
             .session_set_config_option => handleSetConfigOption(state, alloc, msg),
             .session_set_mode => handleSetMode(state, alloc, msg),
+            .afx_command_execute => handleAfxCommandExecute(state, alloc, msg),
             else => state.writer.writeError(alloc, msg.id, .{
                 .code = ErrorCode.method_not_found,
                 .message = "Method not available in the web core yet",
@@ -1133,6 +1145,7 @@ fn dispatch(state: *ServerState, alloc: Allocator, msg: *jsonrpc.Message) !void 
         .session_prompt => startPrompt(state, alloc, msg),
         .session_set_config_option => handleSetConfigOption(state, alloc, msg),
         .session_set_mode => handleSetMode(state, alloc, msg),
+        .afx_command_execute => handleAfxCommandExecute(state, alloc, msg),
         .initialize,
         .session_cancel,
         .session_remove,
@@ -1439,9 +1452,255 @@ fn handleInitialize(state: *ServerState, alloc: Allocator, msg: *jsonrpc.Message
     state.client_elicitation = request.client_elicitation;
     state.initialized = true;
 
+    var config_options: std.Io.Writer.Allocating = .init(alloc);
+    defer config_options.deinit();
+    try config_options.writer.writeAll("[");
+    if (comptime !host_target.is_wasm) {
+        try sessions.writeProviderConfigOption(&config_options.writer, state.provider);
+        try config_options.writer.writeAll(",");
+    }
+    try sessions.writeModelConfigOption(
+        &config_options.writer,
+        state.selected_model,
+        state.capability_resolver.catalogEntries(),
+    );
+    try config_options.writer.writeAll(",");
+    try sessions.writeModeConfigOption(
+        &config_options.writer,
+        state.cfg.mode_registry,
+        state.cfg.mode_registry.default_mode_id,
+    );
+    try config_options.writer.writeAll(",");
+    try sessions.writeFastConfigOption(&config_options.writer, state.fast_mode);
+    try config_options.writer.writeAll("]");
+    const available_commands = try sessions.buildSlashCommandsJson(alloc);
+    defer alloc.free(available_commands);
+
     var out: std.Io.Writer.Allocating = .init(alloc);
     defer out.deinit();
-    try acp_types.writeInitializeResponse(&out.writer);
+    try acp_types.writeInitializeResponse(
+        &out.writer,
+        config_options.writer.buffered(),
+        available_commands,
+    );
+    try state.writer.writeResponse(alloc, msg.id, out.writer.buffered());
+}
+
+fn handleAfxCommandExecute(
+    state: *ServerState,
+    alloc: Allocator,
+    msg: *jsonrpc.Message,
+) !void {
+    const params = msg.params_raw orelse return state.writer.writeError(alloc, msg.id, .{
+        .code = ErrorCode.invalid_params,
+        .message = "Missing params",
+    });
+    const parsed = std.json.parseFromSlice(std.json.Value, alloc, params, .{}) catch
+        return state.writer.writeError(alloc, msg.id, .{
+            .code = ErrorCode.invalid_params,
+            .message = "Invalid params",
+        });
+    defer parsed.deinit();
+    if (parsed.value != .object) {
+        return state.writer.writeError(alloc, msg.id, .{
+            .code = ErrorCode.invalid_params,
+            .message = "Invalid params",
+        });
+    }
+    const command_value = parsed.value.object.get("command") orelse
+        return state.writer.writeError(alloc, msg.id, .{
+            .code = ErrorCode.invalid_params,
+            .message = "Missing command",
+        });
+    if (command_value != .string) {
+        return state.writer.writeError(alloc, msg.id, .{
+            .code = ErrorCode.invalid_params,
+            .message = "Invalid command",
+        });
+    }
+    const command = std.mem.trimStart(u8, command_value.string, "/");
+    const arguments = if (parsed.value.object.get("arguments")) |value|
+        if (value == .object) value.object else null
+    else
+        null;
+
+    var out: std.Io.Writer.Allocating = .init(alloc);
+    defer out.deinit();
+
+    if (std.mem.eql(u8, command, "permissions")) {
+        if (arguments) |values| {
+            if (values.get("mode")) |mode_value| {
+                if (mode_value != .string) {
+                    return state.writer.writeError(alloc, msg.id, .{
+                        .code = ErrorCode.invalid_params,
+                        .message = "Invalid permission mode",
+                    });
+                }
+                const mode = config_runtime.parsePermissionMode(mode_value.string) orelse
+                    return state.writer.writeError(alloc, msg.id, .{
+                        .code = ErrorCode.invalid_params,
+                        .message = "Invalid permission mode",
+                    });
+                state.permission_mode = mode;
+                if (state.active_session) |*active| active.permission_mode = mode;
+            }
+        }
+        try out.writer.writeAll("{\"kind\":\"state_change\",\"title\":\"Permissions\",\"fields\":{\"mode\":");
+        try writeJsonStr(@tagName(state.permission_mode), &out.writer);
+        try out.writer.writeAll("}}");
+    } else if (std.mem.eql(u8, command, "status")) {
+        const model = if (state.active_session) |*active| active.model else state.selected_model;
+        const provider = if (state.active_session) |*active| active.provider else state.provider;
+        const mode = if (state.active_session) |*active| active.mode else state.cfg.mode_registry.default_mode_id;
+        try out.writer.writeAll("{\"kind\":\"report\",\"title\":\"Status\",\"fields\":{\"model\":");
+        try writeJsonStr(model, &out.writer);
+        try out.writer.writeAll(",\"provider\":");
+        try writeJsonStr(@tagName(provider), &out.writer);
+        try out.writer.writeAll(",\"mode\":");
+        try writeJsonStr(mode, &out.writer);
+        try out.writer.writeAll(",\"permissions\":");
+        try writeJsonStr(@tagName(state.permission_mode), &out.writer);
+        try out.writer.writeAll("}}");
+    } else if (std.mem.eql(u8, command, "stats") or
+        std.mem.eql(u8, command, "usage"))
+    {
+        try out.writer.writeAll("{\"kind\":\"report\",\"title\":");
+        try writeJsonStr(if (std.mem.eql(u8, command, "stats")) "Statistics" else "Usage", &out.writer);
+        try out.writer.writeAll(",\"fields\":{");
+        if (state.active_session) |*active| {
+            var usage = try active.session_rt.usage.snapshot(alloc);
+            defer usage.deinit(alloc);
+            try out.writer.print(
+                "\"turns\":{d},\"inputTokens\":{d},\"outputTokens\":{d},\"cacheReadTokens\":{d},\"cacheWriteTokens\":{d},\"cost\":{d:.6}",
+                .{
+                    active.session_rt.history.items.len,
+                    usage.input_tokens,
+                    usage.output_tokens,
+                    usage.cache_read_tokens,
+                    usage.cache_write_tokens,
+                    usage.total_cost,
+                },
+            );
+        } else {
+            try out.writer.writeAll("\"turns\":0,\"inputTokens\":0,\"outputTokens\":0,\"cacheReadTokens\":0,\"cacheWriteTokens\":0,\"cost\":0");
+        }
+        try out.writer.writeAll("}}");
+    } else if (std.mem.eql(u8, command, "version")) {
+        try out.writer.writeAll("{\"kind\":\"report\",\"title\":\"Version\",\"fields\":{\"version\":");
+        try writeJsonStr(build_options.app_version, &out.writer);
+        try out.writer.writeAll("}}");
+    } else if (std.mem.eql(u8, command, "reset")) {
+        const active = if (state.active_session) |*value| value else return state.writer.writeError(alloc, msg.id, .{
+            .code = ErrorCode.invalid_request,
+            .message = "No active session",
+        });
+        active.session_rt.reset(alloc);
+        try out.writer.writeAll("{\"kind\":\"state_change\",\"title\":\"Session reset\",\"fields\":{}}");
+    } else if (std.mem.eql(u8, command, "compact")) {
+        const active = if (state.active_session) |*value| value else return state.writer.writeError(alloc, msg.id, .{
+            .code = ErrorCode.invalid_request,
+            .message = "No active session",
+        });
+        const previous_start = active.session_rt.context_history_start;
+        active.session_rt.forceCompaction();
+        const changed = active.session_rt.context_history_start != previous_start;
+        try out.writer.writeAll("{\"kind\":\"state_change\",\"title\":\"Context compacted\",\"fields\":{\"changed\":");
+        try out.writer.writeAll(if (changed) "\"true\"" else "\"false\"");
+        try out.writer.writeAll("}}");
+    } else if (std.mem.eql(u8, command, "rename")) {
+        const active = if (state.active_session) |*value| value else return state.writer.writeError(alloc, msg.id, .{
+            .code = ErrorCode.invalid_request,
+            .message = "No active session",
+        });
+        const values = arguments orelse return state.writer.writeError(alloc, msg.id, .{
+            .code = ErrorCode.invalid_params,
+            .message = "Missing title",
+        });
+        const title_value = values.get("title") orelse values.get("raw") orelse
+            return state.writer.writeError(alloc, msg.id, .{
+                .code = ErrorCode.invalid_params,
+                .message = "Missing title",
+            });
+        if (title_value != .string) {
+            return state.writer.writeError(alloc, msg.id, .{
+                .code = ErrorCode.invalid_params,
+                .message = "Invalid title",
+            });
+        }
+        const title = std.mem.trim(u8, title_value.string, " \t\r\n");
+        if (title.len == 0 or title.len > session_display_metadata.max_title_bytes or
+            !std.unicode.utf8ValidateSlice(title))
+        {
+            return state.writer.writeError(alloc, msg.id, .{
+                .code = ErrorCode.invalid_params,
+                .message = "Invalid title",
+            });
+        }
+        for (title) |byte| {
+            if (byte < 0x20 or byte == 0x7f) {
+                return state.writer.writeError(alloc, msg.id, .{
+                    .code = ErrorCode.invalid_params,
+                    .message = "Invalid title",
+                });
+            }
+        }
+        const writable = if (active.writable) |*value| value else return state.writer.writeError(alloc, msg.id, .{
+            .code = ErrorCode.invalid_request,
+            .message = "Session persistence unavailable",
+        });
+        var display = session_display_metadata.readSidecarOrFallback(
+            alloc,
+            &writable.log.dir,
+        ) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => try session_display_metadata.missingFallback(alloc),
+        };
+        defer display.deinit(alloc);
+        const owned_title = try alloc.dupe(u8, title);
+        alloc.free(display.title);
+        display.title = owned_title;
+        display.present = true;
+        if (display.origin_workspace_root == null) {
+            display.origin_workspace_root = try alloc.dupe(
+                u8,
+                writable.state.origin_workspace_root,
+            );
+        }
+        try session_display_metadata.writeSidecar(alloc, &writable.log.dir, display);
+        if (active.store) |*store| {
+            try store.updateIndexedTitle(alloc, writable.active_id, title);
+        }
+        try out.writer.writeAll("{\"kind\":\"state_change\",\"title\":\"Session renamed\",\"fields\":{\"title\":");
+        try writeJsonStr(title, &out.writer);
+        try out.writer.writeAll("}}");
+    } else if (std.mem.eql(u8, command, "fast")) {
+        const model = if (state.active_session) |*active| active.model else state.selected_model;
+        const currently_enabled = if (state.active_session) |*active|
+            active.fast_mode
+        else
+            state.fast_mode;
+        var supports_fast = false;
+        if (state.capability_resolver.catalogEntries()) |entries| {
+            for (entries) |entry| {
+                if (std.mem.eql(u8, entry.id, model)) {
+                    supports_fast = entry.supports_fast_mode;
+                    break;
+                }
+            }
+        }
+        const enabled = if (currently_enabled) false else supports_fast;
+        state.fast_mode = enabled;
+        if (state.active_session) |*active| active.fast_mode = enabled;
+        try out.writer.writeAll("{\"kind\":\"state_change\",\"title\":\"Fast Mode\",\"fields\":{\"enabled\":");
+        try out.writer.writeAll(if (enabled) "\"true\"" else "\"false\"");
+        try out.writer.writeAll(",\"supported\":");
+        try out.writer.writeAll(if (supports_fast) "\"true\"" else "\"false\"");
+        try out.writer.writeAll("}}");
+    } else {
+        try out.writer.writeAll("{\"kind\":\"unsupported\",\"title\":\"Command unavailable\",\"fields\":{\"command\":");
+        try writeJsonStr(command, &out.writer);
+        try out.writer.writeAll("}}");
+    }
     try state.writer.writeResponse(alloc, msg.id, out.writer.buffered());
 }
 
@@ -1743,6 +2002,11 @@ fn handleSetConfigOption(state: *ServerState, alloc: Allocator, msg: *jsonrpc.Me
     );
     try out.writer.writeAll(",");
     try sessions.writeModeConfigOption(&out.writer, state.cfg.mode_registry, current_mode);
+    try out.writer.writeAll(",");
+    try sessions.writeFastConfigOption(
+        &out.writer,
+        if (state.active_session) |session| session.fast_mode else state.fast_mode,
+    );
     try out.writer.writeAll("]}");
     try state.writer.writeResponse(alloc, msg.id, out.writer.buffered());
 }
@@ -1927,6 +2191,7 @@ test "ACP method parser classifies request dispatch methods" {
     try std.testing.expectEqual(AcpMethod.session_prompt, AcpMethod.parse("session/prompt"));
     try std.testing.expectEqual(AcpMethod.session_set_config_option, AcpMethod.parse("session/set_config_option"));
     try std.testing.expectEqual(AcpMethod.session_set_mode, AcpMethod.parse("session/set_mode"));
+    try std.testing.expectEqual(AcpMethod.afx_command_execute, AcpMethod.parse("afx/command/execute"));
     try std.testing.expectEqual(AcpMethod.unknown, AcpMethod.parse("workspace/unknown"));
 }
 
@@ -1941,6 +2206,7 @@ test "ACP prompt gate policy keeps lifecycle interruption responsive" {
     try std.testing.expect(AcpMethod.session_prompt.waitsForActivePrompt());
     try std.testing.expect(AcpMethod.session_set_config_option.waitsForActivePrompt());
     try std.testing.expect(!AcpMethod.session_set_mode.waitsForActivePrompt());
+    try std.testing.expect(AcpMethod.afx_command_execute.waitsForActivePrompt());
     try std.testing.expect(AcpMethod.unknown.waitsForActivePrompt());
 }
 
