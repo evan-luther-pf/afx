@@ -132,10 +132,27 @@ pub fn writeAgentMessageChunk(w: *std.Io.Writer, text: []const u8) !void {
     try w.writeAll("}}");
 }
 
-pub fn writeUserMessageChunk(w: *std.Io.Writer, text: []const u8) !void {
+pub fn writeUserMessageChunk(
+    w: *std.Io.Writer,
+    text: []const u8,
+    images: []const core_types.ImageAttachment,
+) !void {
     try w.writeAll("{\"sessionUpdate\":\"user_message_chunk\",\"content\":{\"type\":\"text\",\"text\":");
     try writeJsonStr(text, w);
-    try w.writeAll("}}");
+    try w.writeAll("}");
+    if (images.len > 0) {
+        try w.writeAll(",\"_meta\":{\"afx\":{\"images\":[");
+        for (images, 0..) |image, index| {
+            if (index > 0) try w.writeAll(",");
+            try w.writeAll("{\"path\":");
+            try writeJsonStr(image.snapshot_path orelse image.path, w);
+            try w.writeAll(",\"mediaType\":");
+            try writeJsonStr(image.media_type, w);
+            try w.writeAll("}");
+        }
+        try w.writeAll("]}}");
+    }
+    try w.writeAll("}");
 }
 
 pub fn writeToolCall(
@@ -397,7 +414,7 @@ test "writeUserMessageChunk produces valid json" {
     const alloc = std.testing.allocator;
     var out: std.Io.Writer.Allocating = .init(alloc);
     defer out.deinit();
-    try writeUserMessageChunk(&out.writer, "User says hello");
+    try writeUserMessageChunk(&out.writer, "User says hello", &.{});
     try std.testing.expect(std.mem.find(u8, out.writer.buffered(), "\"user_message_chunk\"") != null);
     try std.testing.expect(std.mem.find(u8, out.writer.buffered(), "User says hello") != null);
 }

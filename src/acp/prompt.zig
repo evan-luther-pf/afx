@@ -41,6 +41,7 @@ const context_contract = @import("../core/workspace/context_contract.zig");
 const config_runtime = @import("../core/config/config_runtime.zig");
 const model_capabilities = @import("../core/config/model_capabilities.zig");
 const mode_registry = @import("../core/modes/mode_registry.zig");
+const change_tracker = @import("../core/workspace/change_tracker.zig");
 const web_search_runtime = @import("../core/tooling/web_search_runtime.zig");
 const debug_trace = @import("../core/shared/debug_trace.zig");
 const display_width = @import("../core/shared/display_width.zig");
@@ -1286,7 +1287,7 @@ fn appendRuntimeContext(raw_ctx: *anyopaque, arena: Allocator, messages: *std.Ar
         .access_scope = ctx.state.workspace_access.scope(ctx.state.workspace_root),
         .interactive = false,
         .permission_mode = ctx.captured_permission_mode orelse session.permission_mode,
-        .tracker = null,
+        .tracker = &session.change_tracker,
         .background = &ctx.state.background,
         .session = &session.session_rt,
     }, arena, messages);
@@ -1481,7 +1482,28 @@ fn requestAcpPermission(
     try jsonrpc.writeJsonStr(mapToolKind(call.name).jsonString(), &params.writer);
     try params.writer.writeAll(",\"status\":\"pending\",\"rawInput\":");
     try params.writer.writeAll(validated_arguments.written());
-    try params.writer.writeAll("},\"options\":[");
+    try params.writer.writeAll("},\"_meta\":{\"afx\":{\"toolName\":");
+    try jsonrpc.writeJsonStr(call.name, &params.writer);
+    try params.writer.writeAll(",\"origin\":");
+    switch (request.origin) {
+        .active_session => try jsonrpc.writeJsonStr("active_session", &params.writer),
+        .subagent => |name| {
+            try jsonrpc.writeJsonStr("subagent", &params.writer);
+            try params.writer.writeAll(",\"subagent\":");
+            try jsonrpc.writeJsonStr(name, &params.writer);
+        },
+    }
+    if (request.explanation) |explanation| {
+        try params.writer.writeAll(",\"explanation\":");
+        try jsonrpc.writeJsonStr(explanation, &params.writer);
+    }
+    if (request.command) |command| {
+        try params.writer.writeAll(",\"command\":");
+        try jsonrpc.writeJsonStr(command, &params.writer);
+    }
+    try params.writer.writeAll(",\"confirmationOnly\":");
+    try params.writer.writeAll(if (request.confirmation_only) "true" else "false");
+    try params.writer.writeAll("}},\"options\":[");
     try writePermissionOption(&params.writer, "allow_once", "Allow once", "allow_once");
     try params.writer.writeByte(',');
     try writePermissionOption(&params.writer, "allow_always", "Allow for this session", "allow_always");
@@ -1691,10 +1713,67 @@ fn completeToolCallTransport(
 }
 
 fn publishCommittedFileHandoff(
-    _: *anyopaque,
-    _: file_mutation.CommittedFileHandoff,
+    raw_ctx: *anyopaque,
+    handoff: file_mutation.CommittedFileHandoff,
 ) agent_runtime.SecondaryPublicationReport {
-    return .{ .diff = .skipped, .tracker = .skipped };
+    const ctx: *AcpContext = @ptrCast(@alignCast(raw_ctx));
+    const active = if (ctx.state.active_session) |*session| session else return .{ .diff = .skipped, .tracker = .failed };
+    var diff_outcome: agent_runtime.SecondarySinkOutcome = .skipped;
+    if (handoff.full_view) |full_view| {
+        var payload = diff_mod.formatFileChangePayload(
+            ctx.alloc,
+            ctx.alloc,
+            handoff.preview,
+            handoff.tracker.previous_content,
+            .{
+                .after_content = full_view.after_content,
+                .lifecycle_id = full_view.lifecycle_id,
+            },
+            .{
+                .added_fg = "",
+                .removed_fg = "",
+                .context_fg = "",
+                .added_marker_fg = "",
+                .removed_marker_fg = "",
+                .reset = "",
+            },
+        ) catch null;
+        if (payload) |*value| {
+            defer diff_mod.freeDiffEntryPayload(ctx.alloc, value.*);
+            ctx.sendToolCallDiff(
+                full_view.lifecycle_id.call_id,
+                value.preview,
+                value.additions,
+                value.deletions,
+            ) catch {
+                diff_outcome = .failed;
+            };
+            if (diff_outcome != .failed) diff_outcome = .published;
+        }
+    }
+    const path = ctx.alloc.dupe(u8, handoff.tracker.raw_path) catch
+        return .{ .diff = .skipped, .tracker = .failed };
+    const previous_content = if (handoff.tracker.previous_content) |content|
+        ctx.alloc.dupe(u8, content) catch {
+            ctx.alloc.free(path);
+            return .{ .diff = .skipped, .tracker = .failed };
+        }
+    else
+        null;
+    active.change_tracker.pushOperation(ctx.alloc, .{
+        .kind = switch (handoff.tracker.kind) {
+            .write => change_tracker.OperationKind.write,
+            .edit => change_tracker.OperationKind.edit,
+        },
+        .path = path,
+        .previous_content = previous_content,
+        .timestamp_ms = handoff.tracker.committed_at_ms,
+    }) catch {
+        ctx.alloc.free(path);
+        if (previous_content) |content| ctx.alloc.free(content);
+        return .{ .diff = .skipped, .tracker = .failed };
+    };
+    return .{ .diff = diff_outcome, .tracker = .published };
 }
 
 fn publishDeferredToolCompletion(

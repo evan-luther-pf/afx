@@ -16,6 +16,7 @@ const app_lifecycle = @import("../core/app/app_lifecycle.zig");
 const app_runtime_setup = @import("../core/app/app_runtime_setup.zig");
 const builtin_skills = @import("../builtins/skills.zig");
 const builtin_tools = @import("../builtins/tools.zig");
+const builtin_mcp = @import("../builtins/mcp.zig");
 const credentials = @import("../core/auth/credentials.zig");
 const secret = @import("../core/auth/secret.zig");
 const auth_runtime = @import("../core/auth/auth_runtime.zig");
@@ -27,17 +28,20 @@ const hooks = @import("../core/hooks/hooks.zig");
 const mcp_runtime = @import("../core/mcp/mcp_runtime.zig");
 const mode_registry = @import("../core/modes/mode_registry.zig");
 const skill_runtime = @import("../core/skills/skill_runtime.zig");
+const skill_commands = @import("../core/skills/skill_commands.zig");
 const session_codec = @import("../core/session/session_codec.zig");
 const session_display_metadata = @import("../core/session/session_display_metadata.zig");
 const image_attachments = @import("../core/images/image_attachments.zig");
 const session_log = @import("../core/session/session_log.zig");
 const session_store = @import("../core/session/session_store.zig");
+const session_tree = @import("../core/session/session_tree.zig");
 const session_runtime = @import("../core/session/session.zig");
 const worker_runtime = @import("../core/agent/worker_runtime.zig");
 const background_runtime = @import("../core/background/background_runtime.zig");
 const terminal_client_runtime = @import("../core/terminal/client.zig");
 const subagent_tool_host = @import("../core/subagent/tool_host.zig");
 const subagent_authority = @import("../core/subagent/authority.zig");
+const change_tracker = @import("../core/workspace/change_tracker.zig");
 const types = @import("../core/shared/types.zig");
 const context_contract = @import("../core/workspace/context_contract.zig");
 const workspace_access = @import("../core/workspace/workspace_access.zig");
@@ -160,6 +164,7 @@ pub const ActiveSessionState = struct {
     model: []u8,
     provider: model_provider.ProviderId = .gateway,
     mode: []const u8,
+    plan_return_mode: ?[]const u8 = null,
     workspace_root: []const u8,
     api_key: []const u8,
     credential_source: ?types.CredentialSource = null,
@@ -176,6 +181,7 @@ pub const ActiveSessionState = struct {
     /// Runtime-only "allow for this session" grants. Never persisted to
     /// profile or project configuration.
     session_grants: []types.PermissionGrant = &.{},
+    change_tracker: change_tracker.ChangeTracker = .{},
     session_rt: session_runtime.SessionRuntime,
     mcp: ?*mcp_runtime.McpRuntime = null,
     cancel_flag: std.atomic.Value(bool),
@@ -498,6 +504,7 @@ fn destroyActiveSession(state: *ServerState) void {
         image_attachments.cleanupSnapshotDir(path);
         state.alloc.free(path);
     }
+    active.change_tracker.deinit(state.alloc);
     active.session_rt.deinit(state.alloc);
     if (active.writable) |*writable| writable.deinit(state.alloc);
     if (active.store) |*store| store.deinit(state.alloc);
@@ -1486,6 +1493,171 @@ fn handleInitialize(state: *ServerState, alloc: Allocator, msg: *jsonrpc.Message
     try state.writer.writeResponse(alloc, msg.id, out.writer.buffered());
 }
 
+fn writeAfxActivitySnapshot(
+    state: *ServerState,
+    alloc: Allocator,
+    writer: *std.Io.Writer,
+) !void {
+    var agents: std.Io.Writer.Allocating = .init(alloc);
+    defer agents.deinit();
+    try agents.writer.writeByte('[');
+    if (state.subagent_host) |host| {
+        var result = try host.manager.snapshot(alloc, .{
+            .root_id = host.root_id,
+            .limit = 100,
+        });
+        defer result.deinit(alloc);
+        if (result == .snapshot) {
+            for (result.snapshot.nodes, 0..) |node, index| {
+                if (index > 0) try agents.writer.writeByte(',');
+                try agents.writer.writeAll("{\"id\":");
+                try writeJsonStr(node.child_id, &agents.writer);
+                try agents.writer.writeAll(",\"parentId\":");
+                try writeJsonStr(node.parent_id, &agents.writer);
+                try agents.writer.writeAll(",\"name\":");
+                try writeJsonStr(node.name, &agents.writer);
+                try agents.writer.writeAll(",\"state\":");
+                try writeJsonStr(@tagName(node.state), &agents.writer);
+                try agents.writer.writeAll(",\"depth\":");
+                try agents.writer.print("{d}", .{node.depth});
+                try agents.writer.writeAll(",\"startedAtMs\":");
+                try agents.writer.print("{d}", .{node.created_at_ms});
+                try agents.writer.writeByte('}');
+            }
+        }
+    }
+    try agents.writer.writeByte(']');
+
+    var tasks = try state.background.snapshotTasks(alloc);
+    defer tasks.deinit(alloc);
+    var background: std.Io.Writer.Allocating = .init(alloc);
+    defer background.deinit();
+    try background.writer.writeByte('[');
+    for (tasks.items, 0..) |task, index| {
+        if (index > 0) try background.writer.writeByte(',');
+        try background.writer.writeAll("{\"id\":");
+        try background.writer.print("{d}", .{task.id});
+        try background.writer.writeAll(",\"command\":");
+        try writeJsonStr(task.command, &background.writer);
+        try background.writer.writeAll(",\"state\":");
+        try writeJsonStr(@tagName(task.state), &background.writer);
+        try background.writer.writeAll(",\"startedAtMs\":");
+        try background.writer.print("{d}", .{task.started_at_ms});
+        if (task.exit_code) |exit_code| {
+            try background.writer.writeAll(",\"exitCode\":");
+            try background.writer.print("{d}", .{exit_code});
+        }
+        try background.writer.writeByte('}');
+    }
+    try background.writer.writeByte(']');
+
+    try writer.writeAll("{\"kind\":\"report\",\"title\":\"Tasks\",\"fields\":{\"agents\":");
+    try writeJsonStr(agents.writer.buffered(), writer);
+    try writer.writeAll(",\"background\":");
+    try writeJsonStr(background.writer.buffered(), writer);
+    try writer.writeAll("}}");
+}
+
+fn requiredStringArgument(
+    state: *ServerState,
+    alloc: Allocator,
+    request_id: ?jsonrpc.RequestId,
+    arguments: ?std.json.ObjectMap,
+    name: []const u8,
+) !?[]const u8 {
+    const values = arguments orelse {
+        try state.writer.writeError(alloc, request_id, .{
+            .code = ErrorCode.invalid_params,
+            .message = "Missing arguments",
+        });
+        return null;
+    };
+    const value = values.get(name) orelse {
+        try state.writer.writeError(alloc, request_id, .{
+            .code = ErrorCode.invalid_params,
+            .message = "Missing argument",
+        });
+        return null;
+    };
+    if (value != .string or value.string.len == 0) {
+        try state.writer.writeError(alloc, request_id, .{
+            .code = ErrorCode.invalid_params,
+            .message = "Invalid argument",
+        });
+        return null;
+    }
+    return value.string;
+}
+fn findAcpSkill(raw: *anyopaque, name: []const u8) ?skill_commands.SkillInfo {
+    const state: *ServerState = @ptrCast(@alignCast(raw));
+    const skill = skill_runtime.findSkillByName(state.skills.items, name) orelse return null;
+    return .{
+        .path = skill.path,
+        .source_label = skill_runtime.skillGroupLabel(skill.source),
+        .managed_install = skill_runtime.isManagedInstallSkill(skill),
+    };
+}
+
+fn reloadAcpSkills(state: *ServerState, alloc: Allocator) !void {
+    const loaded = try app_runtime_setup.loadSkills(alloc, state.workspace_root, builtin_skills.root_policy);
+    state.skills.replaceLoaded(alloc, loaded.dir, loaded.skills, loaded.diagnostics);
+}
+
+fn writeAfxExtensionsSnapshot(
+    state: *ServerState,
+    alloc: Allocator,
+    writer: *std.Io.Writer,
+) !void {
+    var mcp_json: std.Io.Writer.Allocating = .init(alloc);
+    defer mcp_json.deinit();
+    try mcp_json.writer.writeByte('[');
+    if (state.cfg.home_override orelse io_mod.getenv("HOME")) |home| {
+        const path = try builtin_mcp.configPathFromHome(alloc, home);
+        defer alloc.free(path);
+        var configs = try builtin_mcp.loadConfigFromPath(alloc, path);
+        defer {
+            for (configs.items) |*config| config.deinit(alloc);
+            configs.deinit(alloc);
+        }
+        for (configs.items, 0..) |config, index| {
+            if (index > 0) try mcp_json.writer.writeByte(',');
+            try mcp_json.writer.writeAll("{\"name\":");
+            try writeJsonStr(config.name, &mcp_json.writer);
+            try mcp_json.writer.writeAll(",\"enabled\":");
+            try mcp_json.writer.writeAll(if (config.enabled) "true" else "false");
+            try mcp_json.writer.writeAll(",\"target\":");
+            try writeJsonStr(config.command orelse config.url orelse "", &mcp_json.writer);
+            try mcp_json.writer.writeByte('}');
+        }
+    }
+    try mcp_json.writer.writeByte(']');
+
+    var skills_json: std.Io.Writer.Allocating = .init(alloc);
+    defer skills_json.deinit();
+    try skills_json.writer.writeByte('[');
+    for (state.skills.items, 0..) |skill, index| {
+        if (index > 0) try skills_json.writer.writeByte(',');
+        try skills_json.writer.writeAll("{\"name\":");
+        try writeJsonStr(skill.name, &skills_json.writer);
+        try skills_json.writer.writeAll(",\"path\":");
+        try writeJsonStr(skill.path, &skills_json.writer);
+        try skills_json.writer.writeAll(",\"description\":");
+        try writeJsonStr(skill.description, &skills_json.writer);
+        try skills_json.writer.writeAll(",\"source\":");
+        try writeJsonStr(skill_runtime.skillGroupLabel(skill.source), &skills_json.writer);
+        try skills_json.writer.writeAll(",\"managed\":");
+        try skills_json.writer.writeAll(if (skill_runtime.isManagedInstallSkill(skill)) "true" else "false");
+        try skills_json.writer.writeByte('}');
+    }
+    try skills_json.writer.writeByte(']');
+
+    try writer.writeAll("{\"kind\":\"report\",\"title\":\"Extensions\",\"fields\":{\"mcp\":");
+    try writeJsonStr(mcp_json.writer.buffered(), writer);
+    try writer.writeAll(",\"skills\":");
+    try writeJsonStr(skills_json.writer.buffered(), writer);
+    try writer.writeAll("}}");
+}
+
 fn handleAfxCommandExecute(
     state: *ServerState,
     alloc: Allocator,
@@ -1526,8 +1698,248 @@ fn handleAfxCommandExecute(
 
     var out: std.Io.Writer.Allocating = .init(alloc);
     defer out.deinit();
-
-    if (std.mem.eql(u8, command, "permissions")) {
+    if (std.mem.eql(u8, command, "extensions")) {
+        try writeAfxExtensionsSnapshot(state, alloc, &out.writer);
+    } else if (std.mem.eql(u8, command, "mcp-manage")) {
+        const raw = try requiredStringArgument(state, alloc, msg.id, arguments, "raw") orelse return;
+        const home = state.cfg.home_override orelse io_mod.getenv("HOME") orelse
+            return state.writer.writeError(alloc, msg.id, .{
+                .code = ErrorCode.invalid_request,
+                .message = "Profile directory unavailable",
+            });
+        const path = try builtin_mcp.configPathFromHome(alloc, home);
+        defer alloc.free(path);
+        var words = std.mem.tokenizeAny(u8, raw, " \t\r\n");
+        const action = words.next() orelse return state.writer.writeError(alloc, msg.id, .{
+            .code = ErrorCode.invalid_params,
+            .message = "Missing MCP action",
+        });
+        const name = words.next() orelse return state.writer.writeError(alloc, msg.id, .{
+            .code = ErrorCode.invalid_params,
+            .message = "Missing MCP server name",
+        });
+        var changed = false;
+        if (std.mem.eql(u8, action, "add")) {
+            var command_parts: std.ArrayList([]const u8) = .empty;
+            defer command_parts.deinit(alloc);
+            while (words.next()) |word| try command_parts.append(alloc, word);
+            if (command_parts.items.len == 0) return state.writer.writeError(alloc, msg.id, .{
+                .code = ErrorCode.invalid_params,
+                .message = "Missing MCP server command",
+            });
+            try builtin_mcp.addOrReplaceLocalServer(alloc, path, name, command_parts.items);
+            changed = true;
+        } else if (std.mem.eql(u8, action, "remove")) {
+            changed = try builtin_mcp.removeServerFromPath(alloc, path, name);
+        } else if (std.mem.eql(u8, action, "enable") or std.mem.eql(u8, action, "disable")) {
+            changed = try builtin_mcp.setServerEnabledAtPath(
+                alloc,
+                path,
+                name,
+                std.mem.eql(u8, action, "enable"),
+            );
+        } else {
+            return state.writer.writeError(alloc, msg.id, .{
+                .code = ErrorCode.invalid_params,
+                .message = "Invalid MCP action",
+            });
+        }
+        try out.writer.writeAll("{\"kind\":\"state_change\",\"title\":\"MCP Servers\",\"fields\":{\"changed\":");
+        try out.writer.writeAll(if (changed) "\"true\"" else "\"false\"");
+        try out.writer.writeAll(",\"restartRequired\":\"true\"}}");
+    } else if (std.mem.eql(u8, command, "skill-manage")) {
+        const raw = try requiredStringArgument(state, alloc, msg.id, arguments, "raw") orelse return;
+        const parsed_command = builtin_skills.command_provider.parseCommand(raw);
+        var result = builtin_skills.command_provider.executeCommand(alloc, parsed_command, .{
+            .skills_dir = state.skills.dir,
+            .find_ctx = @ptrCast(state),
+            .find_skill = findAcpSkill,
+        }) catch return state.writer.writeError(alloc, msg.id, .{
+            .code = ErrorCode.invalid_request,
+            .message = "Skill action failed",
+        });
+        defer result.deinit(alloc);
+        switch (result) {
+            .notice => |notice| if (notice.reload) try reloadAcpSkills(state, alloc),
+            .installed => try reloadAcpSkills(state, alloc),
+            .open_menu, .focus_menu => {},
+        }
+        try out.writer.writeAll("{\"kind\":\"state_change\",\"title\":\"Skills\",\"fields\":{\"changed\":\"true\"}}");
+    } else if (std.mem.eql(u8, command, "plan")) {
+        const active = if (state.active_session) |*value| value else return state.writer.writeError(alloc, msg.id, .{
+            .code = ErrorCode.invalid_request,
+            .message = "No active session",
+        });
+        const action = if (arguments) |values|
+            if (values.get("raw")) |value| if (value == .string) std.mem.trim(u8, value.string, " \t\r\n") else "" else ""
+        else
+            "";
+        if (action.len == 0 or std.ascii.eqlIgnoreCase(action, "on")) {
+            if (!std.mem.eql(u8, active.mode, "plan")) {
+                active.plan_return_mode = active.mode;
+                applySessionMode(state.cfg.mode_registry, active, "plan");
+            }
+        } else if (std.ascii.eqlIgnoreCase(action, "off")) {
+            const return_mode = active.plan_return_mode orelse "code";
+            applySessionMode(state.cfg.mode_registry, active, return_mode);
+            active.plan_return_mode = null;
+        } else if (!std.ascii.eqlIgnoreCase(action, "status")) {
+            return state.writer.writeError(alloc, msg.id, .{
+                .code = ErrorCode.invalid_params,
+                .message = "Usage: /plan [on|off|status]",
+            });
+        }
+        try out.writer.writeAll("{\"kind\":\"state_change\",\"title\":\"Plan Mode\",\"fields\":{\"enabled\":");
+        try writeJsonStr(if (std.mem.eql(u8, active.mode, "plan")) "true" else "false", &out.writer);
+        try out.writer.writeAll(",\"mode\":");
+        try writeJsonStr(active.mode, &out.writer);
+        try out.writer.writeAll("}}");
+    } else if (std.mem.eql(u8, command, "tree")) {
+        const active = if (state.active_session) |*value| value else return state.writer.writeError(alloc, msg.id, .{
+            .code = ErrorCode.invalid_request,
+            .message = "No active session",
+        });
+        const writable = if (active.writable) |*value| value else return state.writer.writeError(alloc, msg.id, .{
+            .code = ErrorCode.invalid_request,
+            .message = "Session tree requires a saved session",
+        });
+        active.session_write_mutex.lockUncancelable(io_mod.getIo());
+        defer active.session_write_mutex.unlock(io_mod.getIo());
+        const capability = writable.childCapability() catch return state.writer.writeError(alloc, msg.id, .{
+            .code = ErrorCode.internal_error,
+            .message = "Session tree unavailable",
+        });
+        var tree_lock = session_tree.acquire(capability) catch return state.writer.writeError(alloc, msg.id, .{
+            .code = ErrorCode.internal_error,
+            .message = "Session tree unavailable",
+        });
+        defer tree_lock.release();
+        var tree = session_tree.loadOrInit(alloc, capability, active.session_rt.history.items.len) catch
+            return state.writer.writeError(alloc, msg.id, .{
+                .code = ErrorCode.internal_error,
+                .message = "Session tree unavailable",
+            });
+        defer tree.deinit(alloc);
+        var nodes: std.Io.Writer.Allocating = .init(alloc);
+        defer nodes.deinit();
+        try nodes.writer.writeByte('[');
+        for (tree.nodes.items, 0..) |node, index| {
+            if (index > 0) try nodes.writer.writeByte(',');
+            try nodes.writer.writeAll("{\"id\":");
+            try nodes.writer.print("{d}", .{node.id});
+            if (node.parent_id) |parent_id| {
+                try nodes.writer.writeAll(",\"parentId\":");
+                try nodes.writer.print("{d}", .{parent_id});
+            }
+            try nodes.writer.writeAll(",\"forkTurn\":");
+            try nodes.writer.print("{d}", .{node.fork_turn});
+            try nodes.writer.writeAll(",\"historyLength\":");
+            try nodes.writer.print("{d}", .{node.history_len});
+            try nodes.writer.writeAll(",\"active\":");
+            try nodes.writer.writeAll(if (node.id == tree.active_id) "true" else "false");
+            if (node.label) |label| {
+                try nodes.writer.writeAll(",\"label\":");
+                try writeJsonStr(label, &nodes.writer);
+            }
+            try nodes.writer.writeByte('}');
+        }
+        try nodes.writer.writeByte(']');
+        try out.writer.writeAll("{\"kind\":\"report\",\"title\":\"Session Tree\",\"fields\":{\"nodes\":");
+        try writeJsonStr(nodes.writer.buffered(), &out.writer);
+        try out.writer.writeAll("}}");
+    } else if (std.mem.eql(u8, command, "handoff")) {
+        const active = if (state.active_session) |*value| value else return state.writer.writeError(alloc, msg.id, .{
+            .code = ErrorCode.invalid_request,
+            .message = "No active session",
+        });
+        const previous_start = active.session_rt.context_history_start;
+        active.session_rt.forceCompaction();
+        const changed = active.session_rt.context_history_start != previous_start;
+        try out.writer.writeAll("{\"kind\":\"state_change\",\"title\":\"Handoff\",\"fields\":{\"changed\":");
+        try out.writer.writeAll(if (changed) "\"true\"" else "\"false\"");
+        try out.writer.writeAll("}}");
+    } else if (std.mem.eql(u8, command, "activity")) {
+        try writeAfxActivitySnapshot(state, alloc, &out.writer);
+    } else if (std.mem.eql(u8, command, "background-logs")) {
+        const id_text = try requiredStringArgument(state, alloc, msg.id, arguments, "id") orelse return;
+        const id = std.fmt.parseInt(u64, id_text, 10) catch
+            return state.writer.writeError(alloc, msg.id, .{
+                .code = ErrorCode.invalid_params,
+                .message = "Invalid task ID",
+            });
+        const body = state.background.readTaskLogSummaryBody(
+            alloc,
+            .{ .id = id },
+            16 * 1024,
+            32 * 1024,
+            500,
+        ) catch return state.writer.writeError(alloc, msg.id, .{
+            .code = ErrorCode.invalid_request,
+            .message = "Task log unavailable",
+        });
+        defer alloc.free(body);
+        try out.writer.writeAll("{\"kind\":\"report\",\"title\":\"Task Log\",\"fields\":{\"output\":");
+        try writeJsonStr(body, &out.writer);
+        try out.writer.writeAll("}}");
+    } else if (std.mem.eql(u8, command, "background-cancel")) {
+        const id_text = try requiredStringArgument(state, alloc, msg.id, arguments, "id") orelse return;
+        const id = std.fmt.parseInt(u64, id_text, 10) catch
+            return state.writer.writeError(alloc, msg.id, .{
+                .code = ErrorCode.invalid_params,
+                .message = "Invalid task ID",
+            });
+        const stopped = state.background.stopTask(alloc, .{ .id = id }) catch
+            return state.writer.writeError(alloc, msg.id, .{
+                .code = ErrorCode.invalid_request,
+                .message = "Task could not be cancelled",
+            });
+        try out.writer.writeAll("{\"kind\":\"state_change\",\"title\":\"Task cancelled\",\"fields\":{\"cancelled\":");
+        try writeJsonStr(if (stopped != null) "true" else "false", &out.writer);
+        try out.writer.writeAll("}}");
+    } else if (std.mem.eql(u8, command, "agent-cancel")) {
+        const id = try requiredStringArgument(state, alloc, msg.id, arguments, "id") orelse return;
+        const host = state.subagent_host orelse return state.writer.writeError(alloc, msg.id, .{
+            .code = ErrorCode.invalid_request,
+            .message = "Subagent runtime unavailable",
+        });
+        const count = host.owner.cancel(id, "Cancelled from GUI", io_mod.milliTimestamp()) catch
+            return state.writer.writeError(alloc, msg.id, .{
+                .code = ErrorCode.invalid_request,
+                .message = "Agent could not be cancelled",
+            });
+        try out.writer.writeAll("{\"kind\":\"state_change\",\"title\":\"Agent cancelled\",\"fields\":{\"count\":");
+        var count_text: [32]u8 = undefined;
+        try writeJsonStr(try std.fmt.bufPrint(&count_text, "{d}", .{count}), &out.writer);
+        try out.writer.writeAll("}}");
+    } else if (std.mem.eql(u8, command, "agent-message")) {
+        const id = try requiredStringArgument(state, alloc, msg.id, arguments, "id") orelse return;
+        const content = try requiredStringArgument(state, alloc, msg.id, arguments, "content") orelse return;
+        const host = state.subagent_host orelse return state.writer.writeError(alloc, msg.id, .{
+            .code = ErrorCode.invalid_request,
+            .message = "Subagent runtime unavailable",
+        });
+        const timestamp = io_mod.milliTimestamp();
+        const invocation_id = try std.fmt.allocPrint(alloc, "gui-message-{d}", .{timestamp});
+        defer alloc.free(invocation_id);
+        var result = host.sendMessage(alloc, .{
+            .caller_id = host.root_id,
+            .invocation_id = invocation_id,
+            .child_id = id,
+            .content = content,
+            .timestamp_ms = timestamp,
+        }) catch return state.writer.writeError(alloc, msg.id, .{
+            .code = ErrorCode.invalid_request,
+            .message = "Message could not be sent",
+        });
+        defer result.deinit(alloc);
+        if (result == .failure) {
+            return state.writer.writeError(alloc, msg.id, .{
+                .code = ErrorCode.invalid_request,
+                .message = "Message could not be sent",
+            });
+        }
+        try out.writer.writeAll("{\"kind\":\"state_change\",\"title\":\"Message sent\",\"fields\":{}}");
+    } else if (std.mem.eql(u8, command, "permissions")) {
         if (arguments) |values| {
             if (values.get("mode")) |mode_value| {
                 if (mode_value != .string) {
@@ -1606,6 +2018,48 @@ fn handleAfxCommandExecute(
         const changed = active.session_rt.context_history_start != previous_start;
         try out.writer.writeAll("{\"kind\":\"state_change\",\"title\":\"Context compacted\",\"fields\":{\"changed\":");
         try out.writer.writeAll(if (changed) "\"true\"" else "\"false\"");
+        try out.writer.writeAll("}}");
+    } else if (std.mem.eql(u8, command, "undo") or
+        std.mem.eql(u8, command, "revert"))
+    {
+        const active = if (state.active_session) |*value| value else return state.writer.writeError(alloc, msg.id, .{
+            .code = ErrorCode.invalid_request,
+            .message = "No active session",
+        });
+        const result = if (std.mem.eql(u8, command, "revert")) blk: {
+            const values = arguments orelse return state.writer.writeError(alloc, msg.id, .{
+                .code = ErrorCode.invalid_params,
+                .message = "Missing path",
+            });
+            const path = values.get("path") orelse return state.writer.writeError(alloc, msg.id, .{
+                .code = ErrorCode.invalid_params,
+                .message = "Missing path",
+            });
+            if (path != .string) return state.writer.writeError(alloc, msg.id, .{
+                .code = ErrorCode.invalid_params,
+                .message = "Invalid path",
+            });
+            break :blk active.change_tracker.undoPath(alloc, path.string);
+        } else active.change_tracker.undoLast(alloc);
+        try out.writer.writeAll("{\"kind\":\"state_change\",\"title\":\"Change reverted\",\"fields\":{\"outcome\":");
+        switch (result) {
+            .restored => |path| {
+                try writeJsonStr("restored", &out.writer);
+                try out.writer.writeAll(",\"path\":");
+                try writeJsonStr(path, &out.writer);
+            },
+            .deleted => |path| {
+                try writeJsonStr("deleted", &out.writer);
+                try out.writer.writeAll(",\"path\":");
+                try writeJsonStr(path, &out.writer);
+            },
+            .unavailable => |path| {
+                try writeJsonStr("unavailable", &out.writer);
+                try out.writer.writeAll(",\"path\":");
+                try writeJsonStr(path, &out.writer);
+            },
+            .empty => try writeJsonStr("empty", &out.writer),
+        }
         try out.writer.writeAll("}}");
     } else if (std.mem.eql(u8, command, "rename")) {
         const active = if (state.active_session) |*value| value else return state.writer.writeError(alloc, msg.id, .{

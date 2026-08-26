@@ -652,7 +652,7 @@ fn sendPendingRecoveryUpdate(
     checkpoint: ?session_codec.RecoveryCheckpoint,
 ) !void {
     const recovery = checkpoint orelse return;
-    try sendUserHistoryChunk(state, alloc, session_id, recovery.user.text);
+    try sendUserHistoryChunk(state, alloc, session_id, recovery.user.text, recovery.user.images);
     try sendExecutionHistory(state, alloc, session_id, recovery.execution);
     if (recovery.assistant_source.len > 0) {
         try sendAgentHistoryChunk(state, alloc, session_id, recovery.assistant_source);
@@ -942,8 +942,14 @@ fn sendHistoryTurnAsUpdates(state: *server.ServerState, alloc: Allocator, sessio
         .interrupted => |i| i.user.text,
         .compacted_summary => |c| c.summary,
     };
+    const user_images: []const types.ImageAttachment = switch (turn) {
+        .assistant => |a| a.user.images,
+        .background_command => |b| b.user.images,
+        .interrupted => |i| i.user.images,
+        .compacted_summary => &.{},
+    };
 
-    try sendUserHistoryChunk(state, alloc, session_id, user_text);
+    try sendUserHistoryChunk(state, alloc, session_id, user_text, user_images);
 
     switch (turn) {
         .assistant => |assistant| {
@@ -975,13 +981,19 @@ fn sendHistoryTurnAsUpdates(state: *server.ServerState, alloc: Allocator, sessio
     }
 }
 
-fn sendUserHistoryChunk(state: *server.ServerState, alloc: Allocator, session_id: []const u8, text: []const u8) !void {
+fn sendUserHistoryChunk(
+    state: *server.ServerState,
+    alloc: Allocator,
+    session_id: []const u8,
+    text: []const u8,
+    images: []const types.ImageAttachment,
+) !void {
     var out: std.Io.Writer.Allocating = .init(alloc);
     defer out.deinit();
     try out.writer.writeAll("{\"sessionId\":");
     try writeJsonStr(session_id, &out.writer);
     try out.writer.writeAll(",\"update\":");
-    try acp_types.writeUserMessageChunk(&out.writer, text);
+    try acp_types.writeUserMessageChunk(&out.writer, text, images);
     try out.writer.writeAll("}");
     try state.writer.writeNotification(alloc, "session/update", out.writer.buffered());
 }

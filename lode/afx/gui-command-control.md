@@ -30,9 +30,13 @@ Status, statistics, usage, version, and permission mode execute without creating
 
 The GUI advertises only commands with working native, structured ACP, or top-level CLI execution. Terminal-only and not-yet-ported workflows are omitted rather than exposed as broken controls.
 
-Direct actions include session rename, Fast mode, local context compaction, session reset, copy, feedback, and quit. Rename persists through the session display sidecar and index. Fast mode validates the active model capability, updates active state, restores through ACP config options, and reports compact transient feedback.
+Direct actions include session rename, Fast mode, local context compaction, semantic handoff fallback, plan mode, recovery continuation, session reset, copy, feedback, and quit. Rename persists through the session display sidecar and index. Fast mode validates the active model capability, updates active state, restores through ACP config options, and reports compact transient feedback.
 
-Background, agents, credits, and workspace commands bridge to the built afx binary and render their captured output in the main command surface. Unsupported workflows remain registered for terminal use but are not advertised to the GUI.
+Background and child-agent activity use the typed `activity` command result. The GUI polls while its Tasks surface is open and renders parent depth, state, elapsed time, background logs, agent messaging, and cancellation. `/agents` and no-argument `/background` both open this native surface; neither shells out to another afx process.
+
+`/tree` reads the active session's durable branch index into a native hierarchy. `/plan` changes the active ACP mode and restores the preceding mode when disabled. `/continue` sends the ACP recovery metadata on an empty prompt. `/handoff` uses the ACP session compaction path.
+
+MCP and skill inventory use the typed `extensions` result. MCP add, remove, enable, and disable mutate the profile configuration through afx's canonical MCP config implementation. Managed skills install and remove through the canonical skill command provider, followed by in-process discovery refresh.
 
 ## GUI routing
 
@@ -47,6 +51,10 @@ Both picker selection and typed slash submission use the same router.
 - Explicit prompt commands retain ACP prompt transport.
 
 Command surfaces fade into and occupy the existing glass window's full content area. They do not use separate windows, centered cards, or nested glass surfaces. The close control stays in the window's upper-right corner; Escape restores conversation content.
+
+Permission requests remain inline above the composer so the conversation and exact tool target stay visible. The GUI returns the opaque ACP option ID unchanged for allow once, allow for session, or deny; the server performs live revalidation before execution.
+
+Changed files are tracked from committed ACP diff updates. The Changes surface renders one diff per path and exposes Keep, path-specific Revert, and Undo Last through the active session's `ChangeTracker`.
 
 ## Provider authentication
 

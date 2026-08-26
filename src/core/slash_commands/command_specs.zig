@@ -206,17 +206,10 @@ pub const SlashSpec = struct {
     requires_prompt_credential: bool = false,
     pub fn guiAvailable(self: SlashSpec) bool {
         return switch (self.kind) {
-            .continue_recovery,
             .image,
             .images,
             .allowlist,
-            .undo,
-            .mcp,
-            .skills,
             .trace,
-            .tree,
-            .handoff,
-            .plan,
             .settings,
             .alias,
             .paste,
