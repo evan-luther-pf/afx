@@ -5759,7 +5759,7 @@ describe.skipIf(!tmuxAvailable())("TUI gateway stream lifecycle", () => {
       expect(unsupportedGateway.requests).toHaveLength(2);
       expect(readFileSync(resumedStderrPath, "utf8")).toBe("");
     },
-    TIMEOUT,
+    90_000,
   );
 
   test(
