@@ -358,7 +358,9 @@ test("render-lab analyzer enforces active-tool placement and uniqueness", () => 
     );
     configureActiveToolManifest(manifest);
     const failures = analyzeRun(manifest).failures.map((failure) => failure.invariant);
-    expect(failures.includes("active-tool-marker-count")).toBe(entry.rejected);
+    const markerRejected = failures.includes("active-tool-marker-count") ||
+      failures.includes("active-tool-activity-marker-count");
+    expect(markerRejected).toBe(entry.rejected);
     if (!entry.rejected) expect(failures).not.toContain("active-tool-placement");
   }
 });
