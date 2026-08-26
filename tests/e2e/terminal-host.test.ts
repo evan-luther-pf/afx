@@ -464,6 +464,20 @@ function buildCurrentClientFixture(): string {
   const repoRoot = join(import.meta.dir, "../..");
   const fixtureRoot = mkdtempSync(join(tmpdir(), "afx-terminal-client-fixture-"));
   const binary = join(fixtureRoot, "terminal-client-fixture");
+  const buildOptions = join(fixtureRoot, "build_options.zig");
+  writeFileSync(
+    buildOptions,
+    [
+      'pub const product_name = "afx";',
+      'pub const profile_dir_name = ".afx";',
+      'pub const project_config_name = ".afx.json";',
+      'pub const workspace_skills_dir = ".afx/skills";',
+      'pub const workspace_agents_dir = ".afx/agents";',
+      'pub const global_agents_dir = ".afx/agents";',
+      "pub const is_afx = true;",
+      "",
+    ].join("\n"),
+  );
   fixtureArtifacts.push(fixtureRoot);
   execFileSync(
     "zig",
@@ -472,7 +486,10 @@ function buildCurrentClientFixture(): string {
       "-ODebug",
       "-lc",
       `-femit-bin=${binary}`,
-      join(repoRoot, "src", "terminal_client_fixture.zig"),
+      "--dep",
+      "build_options",
+      `-Mroot=${join(repoRoot, "src", "terminal_client_fixture.zig")}`,
+      `-Mbuild_options=${buildOptions}`,
     ],
     { cwd: repoRoot, stdio: "pipe", timeout: 120_000 },
   );
