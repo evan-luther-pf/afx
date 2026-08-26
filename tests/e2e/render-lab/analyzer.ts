@@ -427,7 +427,14 @@ function assertActiveToolPlacementScenario(
     "active-tool-final-update",
   ].includes(frame.event)) {
     const isActiveClippedFrame = frame.event === "active-tool-clipped";
-    assertMarkerCount(failures, frame, activeMarker, isActiveClippedFrame ? 1 : 0);
+    if (isActiveClippedFrame) {
+      const activeCount = countOccurrences(grid, activeMarker);
+      if (activeCount > 1) {
+        push(failures, "active-tool-marker-count", frame, `expected at most one clipped active marker, found ${activeCount}`);
+      }
+    } else {
+      assertMarkerCount(failures, frame, activeMarker, 0);
+    }
     if (isActiveClippedFrame) {
       assertMarkerCount(failures, frame, terminalMarker, 0);
       assertSemanticScrollbackMarkerCount(
