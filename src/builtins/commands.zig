@@ -453,9 +453,10 @@ pub const slash_specs = [_]SlashSpec{
     .{ .kind = .credits, .command = "/credits", .aliases = &.{"/balance"}, .help_entry = "/credits (/balance)", .completion_description = "show gateway credits balance", .presentation_category = .account, .requires_prompt_credential = true },
     .{ .kind = .paste, .command = "/paste", .help_entry = "/paste", .completion_description = "attach an image from the clipboard when supported", .presentation_category = .media },
     .{ .kind = .fast, .command = "/fast", .help_entry = "/fast", .completion_description = "toggle Fast mode when supported", .presentation_category = .model },
-    .{ .kind = .statusline, .command = "/statusline", .help_entry = "/statusline [context|session|workspace]", .completion_description = "toggle status line segments", .presentation_category = .appearance, .has_args = true, .accepts_payload = true },
-    .{ .kind = .notifications, .command = "/sound", .help_entry = "/sound [on|off|max]", .completion_description = "toggle sounds and terminal bells", .presentation_category = .appearance, .has_args = true, .accepts_payload = true },
+    .{ .kind = .statusline, .command = "/statusline", .help_entry = "/statusline [context|session|workspace|cost|git]", .completion_description = "toggle status line segments", .presentation_category = .appearance, .has_args = true, .accepts_payload = true },
+    .{ .kind = .notifications, .command = "/sound", .aliases = &.{"/notifications"}, .help_entry = "/sound [on|off|max]", .completion_description = "toggle sounds, bells, and notifications", .presentation_category = .appearance, .has_args = true, .accepts_payload = true },
     .{ .kind = .workspace, .command = "/workspace", .help_entry = "/workspace [list|add PATH|remove PATH|clear]", .completion_description = "manage additional workspace directories", .presentation_category = .workspace, .show_in_welcome = true, .has_args = true, .accepts_payload = true },
+    .{ .kind = .hotkeys, .command = "/hotkeys", .help_entry = "/hotkeys", .completion_description = "list active keyboard shortcuts and keybindings", .presentation_category = .general, .show_in_welcome = true },
     .{ .kind = .version, .command = "/version", .help_entry = "/version", .completion_description = "show the " ++ product.name ++ " version", .presentation_category = .general },
     .{ .kind = .quit, .command = "/quit", .aliases = &.{"/exit"}, .help_entry = "/quit", .completion_description = "exit the interactive shell", .presentation_category = .general, .show_in_welcome = true },
 };
@@ -561,10 +562,10 @@ test "built-in slash commands register exact active order" {
         "/statusline",
         "/sound",
         "/workspace",
+        "/hotkeys",
         "/version",
         "/quit",
     };
-
     try std.testing.expectEqual(expected_commands.len, slash_specs.len);
     for (expected_commands, slash_specs) |expected, spec| {
         try std.testing.expectEqualStrings(expected, spec.command);
@@ -616,7 +617,7 @@ test "built-in statusline help and completion include workspace" {
     const help = try renderSlashHelp(std.testing.allocator);
     defer std.testing.allocator.free(help);
     try std.testing.expect(
-        std.mem.find(u8, help, "/statusline [context|session|workspace]") != null,
+        std.mem.find(u8, help, "/statusline [context|session|workspace|cost|git]") != null,
     );
 
     try std.testing.expectEqualStrings(

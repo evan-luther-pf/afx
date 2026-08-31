@@ -819,6 +819,8 @@ const statusline_arg_completions = [_][]const u8{
     "/statusline context",
     "/statusline session",
     "/statusline workspace",
+    "/statusline cost",
+    "/statusline git",
 };
 
 const notifications_arg_completions = [_][]const u8{
@@ -2137,6 +2139,22 @@ test "workspace completions expose actions and keep path actions open" {
     try std.testing.expect(slashCompletionHasArgs(testSlashRegistry(), "/workspace add"));
     try std.testing.expect(slashCompletionHasArgs(testSlashRegistry(), "/workspace remove"));
     try std.testing.expect(!slashCompletionHasArgs(testSlashRegistry(), "/workspace clear"));
+}
+
+test "slash completions include statusline controls" {
+    try std.testing.expectEqual(@as(usize, 5), slashCompletionCount(testSlashRegistry(), "/statusline "));
+    try std.testing.expectEqualStrings("/statusline context", nthSlashCompletion(testSlashRegistry(), "/statusline ", 0).?);
+    try std.testing.expectEqualStrings("/statusline session", nthSlashCompletion(testSlashRegistry(), "/statusline ", 1).?);
+    try std.testing.expectEqualStrings("/statusline workspace", nthSlashCompletion(testSlashRegistry(), "/statusline ", 2).?);
+    try std.testing.expectEqualStrings("/statusline cost", nthSlashCompletion(testSlashRegistry(), "/statusline ", 3).?);
+    try std.testing.expectEqualStrings("/statusline git", nthSlashCompletion(testSlashRegistry(), "/statusline ", 4).?);
+    try std.testing.expectEqual(@as(usize, 2), slashCompletionCount(testSlashRegistry(), "/statusline c"));
+    try std.testing.expectEqualStrings("/statusline context", nthSlashCompletion(testSlashRegistry(), "/statusline c", 0).?);
+    try std.testing.expectEqualStrings("/statusline cost", nthSlashCompletion(testSlashRegistry(), "/statusline c", 1).?);
+    try std.testing.expectEqual(@as(usize, 1), slashCompletionCount(testSlashRegistry(), "/statusline cos"));
+    try std.testing.expectEqualStrings("cost", nthSlashCompletionLabel(testSlashRegistry(), "/statusline cos", 0).?);
+    try std.testing.expectEqual(@as(usize, 1), slashCompletionCount(testSlashRegistry(), "/statusline gi"));
+    try std.testing.expectEqualStrings("git", nthSlashCompletionLabel(testSlashRegistry(), "/statusline gi", 0).?);
 }
 
 test "slash completions include sound controls" {

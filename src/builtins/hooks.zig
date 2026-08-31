@@ -50,6 +50,9 @@ pub fn Runtime(comptime App: type) type {
             input: hooks.PostTurnEndInput,
         ) hooks.HandlerError!void {
             const app: *App = @ptrCast(@alignCast(raw));
+            if (comptime @hasField(App, "workspace_identity")) {
+                app.workspace_identity.refreshDirty(app.alloc);
+            }
             if (input.invocation.scope.kind != .interactive) return;
             app.herdr.reportState(.idle, null);
         }

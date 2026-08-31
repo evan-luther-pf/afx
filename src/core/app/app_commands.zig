@@ -3250,6 +3250,8 @@ fn statuslineItemForSetting(setting: settings_catalog.SettingId) ?config_runtime
         .statusline_context => .context,
         .statusline_session => .session,
         .statusline_workspace => .workspace,
+        .statusline_cost => .cost,
+        .statusline_git => .git,
         else => null,
     };
 }
@@ -3263,6 +3265,16 @@ fn statuslineItemEnabled(app: anytype, item: config_runtime.StatuslineItem) bool
             app.workspace_identity.enabled
         else
             false,
+        .cost => if (comptime @hasField(App, "statusline_cost"))
+            app.statusline_cost
+        else
+            false,
+        .git => if (comptime @hasField(App, "statusline_git"))
+            app.statusline_git
+        else if (comptime @hasField(App, "workspace_identity"))
+            app.workspace_identity.git_enabled
+        else
+            false,
     };
 }
 
@@ -3274,6 +3286,17 @@ fn assignStatuslineItem(app: anytype, item: config_runtime.StatuslineItem, enabl
         .session => app.statusline_session = enabled,
         .workspace => if (comptime @hasField(App, "workspace_identity")) {
             app.workspace_identity.enabled = enabled;
+        },
+        .cost => if (comptime @hasField(App, "statusline_cost")) {
+            app.statusline_cost = enabled;
+        },
+        .git => {
+            if (comptime @hasField(App, "statusline_git")) {
+                app.statusline_git = enabled;
+            }
+            if (comptime @hasField(App, "workspace_identity")) {
+                app.workspace_identity.git_enabled = enabled;
+            }
         },
     }
     return current != enabled;
@@ -3310,7 +3333,7 @@ fn handleStatuslineCommand(app: anytype, rest: []const u8) !void {
         try app.writeDomainNotice(.{
             .topic = "statusline",
             .tone = .@"error",
-            .body = "Use: context, session, workspace",
+            .body = "Use: context, session, workspace, cost, git",
         }, true);
         return;
     };
@@ -3451,6 +3474,8 @@ pub fn settingsCatalogSnapshot(app: anytype) settings_catalog.Snapshot {
     if (comptime @hasField(App, "statusline_context")) snapshot.statusline_context = app.statusline_context;
     if (comptime @hasField(App, "statusline_session")) snapshot.statusline_session = app.statusline_session;
     if (comptime @hasField(App, "workspace_identity")) snapshot.statusline_workspace = app.workspace_identity.enabled;
+    if (comptime @hasField(App, "statusline_cost")) snapshot.statusline_cost = app.statusline_cost;
+    if (comptime @hasField(App, "statusline_git")) snapshot.statusline_git = app.statusline_git;
     if (comptime @hasField(App, "prompt_history")) snapshot.prompt_history = app.prompt_history.enabled;
     if (comptime @hasDecl(App, "notificationPreferences")) {
         const notifications = app.notificationPreferences();
@@ -3503,7 +3528,20 @@ pub fn applySettingsCatalogChange(app: anytype, change: settings_catalog.Change)
     switch (change.setting) {
         .model => unreachable,
         .agent_profiles, .agent_model, .agent_effort, .agent_permission, .agent_tools, .agent_spawns, .spawn_depth, .hub_wait => {},
-        .statusline_context, .statusline_session, .statusline_workspace => {
+        .theme => {
+            const current_name = ui_render.current_theme.getName();
+            const runtime_changed = !std.mem.eql(u8, change.value, current_name);
+            if (runtime_changed) {
+                if (comptime @hasField(@TypeOf(app.*), "theme_name")) {
+                    app.theme_name = change.value;
+                }
+                const is_light = ui_render.is_light;
+                ui_render.initThemeNamed(change.value, is_light, null);
+                app.shell.render_requests.request(.first_frame);
+                app.shell.render_requests.request(.footer);
+            }
+        },
+        .statusline_context, .statusline_session, .statusline_workspace, .statusline_cost, .statusline_git => {
             const enabled = parseOnOff(change.value) orelse return error.InvalidSettingsCatalogValue;
             const item = statuslineItemForSetting(change.setting).?;
             if (enabled != statuslineItemEnabled(app, item)) {

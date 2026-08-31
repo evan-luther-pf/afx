@@ -212,6 +212,8 @@ pub const StatuslineItems = struct {
     context_total: ?u32 = null,
     session_title: ?[]const u8 = null,
     mode_label: ?[]const u8 = null,
+    cost_usd: ?f64 = null,
+    git_label: ?[]const u8 = null,
 };
 
 /// Cell budget for the session title segment. The title is capped at 8 words
@@ -451,6 +453,15 @@ pub fn buildHintLine(
             const used_k = statusline.context_used / 1000;
             var ctx_buf: [32]u8 = undefined;
             appendStatusSegment(out, &end, std.fmt.bufPrint(&ctx_buf, "Context: {d}k", .{used_k}) catch "");
+        }
+    }
+    if (statusline.cost_usd) |cost| {
+        var cost_buf: [32]u8 = undefined;
+        appendStatusSegment(out, &end, std.fmt.bufPrint(&cost_buf, "${d:.4}", .{cost}) catch "");
+    }
+    if (statusline.git_label) |git| {
+        if (git.len > 0) {
+            appendStatusSegment(out, &end, git);
         }
     }
     appendWorkspaceIdentity(out, &end, status_limit, statusline);
@@ -1037,6 +1048,41 @@ test "buildHintLine omits the session segment when no title is cached" {
     var buf: [128]u8 = undefined;
     const line = buildHintLine(false, false, true, "openai/gpt-5", .ask, 0, null, false, false, .auto, false, .{
         .session_title = null,
+    }, 80, &buf);
+    try std.testing.expectEqualStrings("ask · gpt-5", line);
+}
+
+test "buildHintLine shows cost when active" {
+    var buf: [128]u8 = undefined;
+    const line1 = buildHintLine(false, false, true, "openai/gpt-5", .ask, 0, null, false, false, .auto, false, .{
+        .cost_usd = 1.2345,
+    }, 80, &buf);
+    try std.testing.expectEqualStrings("ask · gpt-5 · $1.2345", line1);
+
+    const line2 = buildHintLine(false, false, true, "openai/gpt-5", .ask, 0, null, false, false, .auto, false, .{
+        .cost_usd = 0.0,
+    }, 80, &buf);
+    try std.testing.expectEqualStrings("ask · gpt-5 · $0.0000", line2);
+}
+
+test "buildHintLine shows git segment with and without dirty marker" {
+    var buf: [128]u8 = undefined;
+    const clean_line = buildHintLine(false, false, true, "openai/gpt-5", .ask, 0, null, false, false, .auto, false, .{
+        .git_label = "main",
+    }, 80, &buf);
+    try std.testing.expectEqualStrings("ask · gpt-5 · main", clean_line);
+
+    const dirty_line = buildHintLine(false, false, true, "openai/gpt-5", .ask, 0, null, false, false, .auto, false, .{
+        .git_label = "feature/statusline*",
+    }, 80, &buf);
+    try std.testing.expectEqualStrings("ask · gpt-5 · feature/statusline*", dirty_line);
+}
+
+test "buildHintLine hides cost and git segments when unavailable or disabled" {
+    var buf: [128]u8 = undefined;
+    const line = buildHintLine(false, false, true, "openai/gpt-5", .ask, 0, null, false, false, .auto, false, .{
+        .cost_usd = null,
+        .git_label = null,
     }, 80, &buf);
     try std.testing.expectEqualStrings("ask · gpt-5", line);
 }
