@@ -82,11 +82,68 @@ The default `edit` tool binds every patch to the exact file snapshot afx display
 
 Hashline patches can replace tight ranges, target complete syntax blocks, insert at line gaps, move or remove files, and move captured text through persistent named registers. Multi-file patches are prepared together, preserve line endings and UTF-8 BOMs, and recover safely when unrelated lines changed after the read.
 
+
+## Context management: checkpoint and rewind
+
+afx provides `checkpoint` and `rewind` tools for managing model-facing context during exploratory investigations:
+
+- `checkpoint`: Mark the current position in the session tree as an active checkpoint before an investigation.
+- `rewind`: Discard exploratory conversation turns after the checkpoint at turn end, replacing them with a concise findings report.
+
+The full exploratory history remains preserved on disk and visible in the full transcript (`Ctrl+O`) and session tree views.
 ## A terminal interface that stays out of the way
 
 Common reads remain compact. Commands, edits, searches, tasks, and debugger work expand into bounded OMP-style cards. Search cards show the query, answer, sources, model, and token usage without hiding the evidence.
 
 afx keeps ordinary work in terminal scrollback. Full-screen views are reserved for interactions that genuinely need them, such as permission review, menus, and agent management.
+
+## Custom themes
+
+afx auto-detects dark and light terminal backgrounds and supports user-defined color themes. Themes live at `~/.afx/themes/<name>.json`:
+
+```json
+{
+  "name": "magenta",
+  "colors": {
+    "accent": "#FF00FF",
+    "border": "240",
+    "text": "#FFFFFF",
+    "muted": "245",
+    "dim": "240",
+    "error": "#FF5555",
+    "warning": "#FFB86C",
+    "success": "#50FA7B",
+    "diff_added_marker": "#50FA7B",
+    "diff_removed_marker": "#FF5555"
+  }
+}
+```
+
+Color values accept 24-bit hex strings (`"#RRGGBB"`), 256-color palette indices (`0`–`255`), or `""` for the terminal default. Missing tokens fall back to the built-in dark or light palette. Select a theme in `/settings` or override it using the `FX_THEME` environment variable.
+
+## Debugging and context inspection
+
+Run `/dump` to copy the full model-facing context (system prompt, model configuration, tool definitions, and message history) to the clipboard and write a raw JSON request sidecar to temporary storage; note that the sidecar file can contain sensitive information or secrets, so protect or remove it accordingly.
+
+## Keyboard shortcuts
+
+- `Ctrl+O`: Open the full transcript review screen. Switch between Review and Full detail with `←`/`→`, scroll with `PgUp`/`PgDn` or mouse wheel, search with `/` (`n`/`N` jump to next/previous match), and press `Esc` to close search or exit.
+- `Ctrl+R`: Interactive prompt history search in the composer. Filter past entries incrementally, navigate matches with `Up`/`Down` or `Ctrl+R`, press `Enter` to recall into the composer without submitting, or press `Esc` to restore the draft.
+- `Alt+E`: Open the current composer draft in `$VISUAL` or `$EDITOR`. On editor exit, replaces the draft with the edited contents.
+- `Ctrl+X`: Open the subagent manager to view, pause, or resume parallel background agents.
+- `Ctrl+G`: Reload into a downloaded update when ready.
+
+Run `/hotkeys` to see every active shortcut and its binding status. Customize keybindings in `~/.afx/keybindings.json`:
+
+```json
+{
+  "composer.external_editor": "alt+e",
+  "composer.history_search": "ctrl+r",
+  "app.subagents": ["ctrl+x", "alt+x"]
+}
+```
+
+Assigning an empty array `[]` disables a shortcut.
 
 ## Permissions
 

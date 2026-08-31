@@ -24,12 +24,7 @@ const State = struct {
 };
 
 pub const CheckpointInput = struct {
-    goal: []u8,
-
-    fn deinit(self: *CheckpointInput, alloc: Allocator) void {
-        alloc.free(self.goal);
-        self.* = undefined;
-    }
+    fn deinit(_: *CheckpointInput, _: Allocator) void {}
 };
 
 pub const RewindInput = struct {
@@ -42,33 +37,33 @@ pub const RewindInput = struct {
 };
 
 pub fn decodeCheckpoint(ctx: tool_dispatch.DispatchContext, args_json: []const u8) tool_dispatch.DispatchError!tool_dispatch.DecodeResult {
-    return decodeOneString(CheckpointInput, ctx, args_json, "goal");
-}
-
-pub fn decodeRewind(ctx: tool_dispatch.DispatchContext, args_json: []const u8) tool_dispatch.DispatchError!tool_dispatch.DecodeResult {
-    return decodeOneString(RewindInput, ctx, args_json, "report");
-}
-
-fn decodeOneString(comptime Input: type, ctx: tool_dispatch.DispatchContext, args_json: []const u8, field: []const u8) tool_dispatch.DispatchError!tool_dispatch.DecodeResult {
     var parsed = std.json.parseFromSlice(std.json.Value, ctx.allocator, args_json, .{}) catch
         return .{ .failure = try ctx.allocator.dupe(u8, "arguments must be valid JSON") };
     defer parsed.deinit();
-    if (parsed.value != .object or parsed.value.object.count() != 1) {
-        return .{ .failure = try ctx.allocator.dupe(u8, "arguments must contain exactly one field") };
+    if (parsed.value != .object) {
+        return .{ .failure = try ctx.allocator.dupe(u8, "arguments must be a JSON object") };
     }
-    const value = parsed.value.object.get(field) orelse
-        return .{ .failure = try std.fmt.allocPrint(ctx.allocator, "field \"{s}\" is required", .{field}) };
-    if (value != .string or std.mem.trim(u8, value.string, " \t\r\n").len == 0) {
-        return .{ .failure = try std.fmt.allocPrint(ctx.allocator, "field \"{s}\" must be a non-empty string", .{field}) };
+    const input = try ctx.allocator.create(CheckpointInput);
+    input.* = .{};
+    return .{ .input = .{ .ptr = input, .deinit_fn = inputDeinit(CheckpointInput) } };
+}
+
+pub fn decodeRewind(ctx: tool_dispatch.DispatchContext, args_json: []const u8) tool_dispatch.DispatchError!tool_dispatch.DecodeResult {
+    var parsed = std.json.parseFromSlice(std.json.Value, ctx.allocator, args_json, .{}) catch
+        return .{ .failure = try ctx.allocator.dupe(u8, "arguments must be valid JSON") };
+    defer parsed.deinit();
+    if (parsed.value != .object) {
+        return .{ .failure = try ctx.allocator.dupe(u8, "arguments must be a JSON object") };
     }
-    const input = try ctx.allocator.create(Input);
+    const report_val = parsed.value.object.get("report") orelse
+        return .{ .failure = try ctx.allocator.dupe(u8, "field \"report\" is required") };
+    if (report_val != .string or std.mem.trim(u8, report_val.string, " \t\r\n").len == 0) {
+        return .{ .failure = try ctx.allocator.dupe(u8, "field \"report\" must be a non-empty string") };
+    }
+    const input = try ctx.allocator.create(RewindInput);
     errdefer ctx.allocator.destroy(input);
-    if (Input == CheckpointInput) {
-        input.* = .{ .goal = try ctx.allocator.dupe(u8, value.string) };
-    } else {
-        input.* = .{ .report = try ctx.allocator.dupe(u8, std.mem.trim(u8, value.string, " \t\r\n")) };
-    }
-    return .{ .input = .{ .ptr = input, .deinit_fn = inputDeinit(Input) } };
+    input.* = .{ .report = try ctx.allocator.dupe(u8, std.mem.trim(u8, report_val.string, " \t\r\n")) };
+    return .{ .input = .{ .ptr = input, .deinit_fn = inputDeinit(RewindInput) } };
 }
 
 fn inputDeinit(comptime Input: type) *const fn (*anyopaque, Allocator) void {
@@ -85,7 +80,7 @@ pub fn validate(_: tool_dispatch.DispatchContext, _: tool_dispatch.ToolInput) to
     return null;
 }
 
-pub fn callCheckpoint(ctx: tool_dispatch.DispatchContext, erased: tool_dispatch.ToolInput) tool_dispatch.DispatchError!tool_dispatch.ToolResult {
+pub fn callCheckpoint(ctx: tool_dispatch.DispatchContext, _: tool_dispatch.ToolInput) tool_dispatch.DispatchError!tool_dispatch.ToolResult {
     const capability = ctx.session_child_capability orelse
         return .{ .failure = try ctx.allocator.dupe(u8, "checkpoint requires a saved session") };
     var lock = capability.acquireTimedAdvisoryLock(.tool_results, lock_file_name, deadline()) catch |err|
@@ -93,29 +88,16 @@ pub fn callCheckpoint(ctx: tool_dispatch.DispatchContext, erased: tool_dispatch.
     defer lock.release();
 
     const now = io_mod.milliTimestamp();
-    if (loadState(ctx.allocator, capability)) |loaded| {
-        var state = loaded;
-        defer state.deinit(ctx.allocator);
-        const stale_pending = state.phase == .pending and now -| state.started_at_ms >= stale_pending_ms;
-        if (!stale_pending and state.phase != .completed) {
-            return .{ .failure = try ctx.allocator.dupe(u8, "Checkpoint already active.") };
-        }
-    } else |err| switch (err) {
-        error.FileNotFound => {},
-        else => return stateFailure(ctx.allocator, err),
-    }
-
     const call_id = if (ctx.tool_call_id.len > 0) ctx.tool_call_id else "checkpoint";
     saveState(ctx.allocator, capability, .{
         .phase = .active,
         .call_id = @constCast(call_id),
         .started_at_ms = now,
     }) catch |err| return stateFailure(ctx.allocator, err);
-    const input = erased.as(CheckpointInput);
-    return .{ .success = try std.fmt.allocPrint(
-        ctx.allocator,
-        "Checkpoint created.\nGoal: {s}\nComplete the investigation, then call rewind with a concise non-empty report before yielding. Files are not restored by rewind.",
-        .{input.goal},
+
+    return .{ .success = try ctx.allocator.dupe(
+        u8,
+        "Checkpoint set. Explore and investigate, then call rewind with a non-empty findings report before yielding.",
     ) };
 }
 
@@ -127,17 +109,16 @@ pub fn callRewind(ctx: tool_dispatch.DispatchContext, erased: tool_dispatch.Tool
     defer lock.release();
 
     var state = loadState(ctx.allocator, capability) catch |err| switch (err) {
-        error.FileNotFound => return .{ .failure = try ctx.allocator.dupe(u8, "No active checkpoint. Create a checkpoint before calling rewind.") },
+        error.FileNotFound => return .{ .failure = try ctx.allocator.dupe(u8, "No active checkpoint.") },
         else => return stateFailure(ctx.allocator, err),
     };
     defer state.deinit(ctx.allocator);
     switch (state.phase) {
-        .active => {},
-        .completed => return .{ .failure = try ctx.allocator.dupe(u8, "Checkpoint already completed; continue from the retained rewind report.") },
-        .pending => return .{ .failure = try ctx.allocator.dupe(u8, "Checkpoint is not durable yet; retry after the checkpoint turn completes.") },
+        .active, .pending => {},
+        .completed => return .{ .failure = try ctx.allocator.dupe(u8, "No active checkpoint.") },
     }
     _ = erased.as(RewindInput);
-    return .{ .success = try ctx.allocator.dupe(u8, "Rewind requested.\nReport captured for context replacement.") };
+    return .{ .success = try ctx.allocator.dupe(u8, "Rewind requested. Findings report captured for context replacement at turn end.") };
 }
 
 pub fn isActive(alloc: Allocator, capability: *session_child_store.SessionChildCapability) !bool {
@@ -265,9 +246,156 @@ fn deadline() u64 {
 }
 
 pub fn readsOnly(_: tool_dispatch.ToolInput) bool {
-    return false;
+    return true;
 }
 
 pub fn isIrreversible(_: tool_dispatch.ToolInput) bool {
     return false;
+}
+
+test "decodeCheckpoint accepts empty JSON object" {
+    const alloc = std.testing.allocator;
+    const ctx = tool_dispatch.DispatchContext{ .allocator = alloc };
+    const decoded = try decodeCheckpoint(ctx, "{}");
+    switch (decoded) {
+        .input => |input| input.deinit(alloc),
+        .failure => return error.TestUnexpectedFailure,
+    }
+
+    const bad = try decodeCheckpoint(ctx, "[]");
+    switch (bad) {
+        .failure => |msg| alloc.free(msg),
+        .input => return error.TestExpectedEqual,
+    }
+}
+
+test "decodeRewind validates non-empty report" {
+    const alloc = std.testing.allocator;
+    const ctx = tool_dispatch.DispatchContext{ .allocator = alloc };
+
+    // Valid report
+    const decoded = try decodeRewind(ctx, "{\"report\":\"All tests passing\"}");
+    switch (decoded) {
+        .input => |input| {
+            const req = input.as(RewindInput);
+            try std.testing.expectEqualStrings("All tests passing", req.report);
+            input.deinit(alloc);
+        },
+        .failure => return error.TestUnexpectedFailure,
+    }
+
+    // Missing report
+    const missing = try decodeRewind(ctx, "{}");
+    switch (missing) {
+        .failure => |msg| {
+            try std.testing.expect(std.mem.find(u8, msg, "required") != null);
+            alloc.free(msg);
+        },
+        .input => return error.TestExpectedEqual,
+    }
+
+    // Empty report
+    const empty = try decodeRewind(ctx, "{\"report\":\"   \"}");
+    switch (empty) {
+        .failure => |msg| {
+            try std.testing.expect(std.mem.find(u8, msg, "non-empty") != null);
+            alloc.free(msg);
+        },
+        .input => return error.TestExpectedEqual,
+    }
+}
+
+test "callCheckpoint and callRewind lifecycle guards and transitions" {
+    const alloc = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(io_mod.getIo(), "results");
+    const result_dir = try io_mod.dirRealpathAlloc(alloc, tmp.dir, "results");
+    defer alloc.free(result_dir);
+
+    var capability = try session_child_store.SessionChildCapability.initLegacyRoute(
+        alloc,
+        result_dir,
+        .tool_results,
+        .writable,
+    );
+    defer capability.deinit();
+
+    const ctx = tool_dispatch.DispatchContext{
+        .allocator = alloc,
+        .session_child_capability = &capability,
+        .tool_call_id = "cp-1",
+    };
+
+    // 1. Rewind before any checkpoint fails with "No active checkpoint."
+    const rewind_input = tool_dispatch.ToolInput{
+        .ptr = @constCast(&RewindInput{ .report = @constCast("report") }),
+        .deinit_fn = struct {
+            fn deinit(_: *anyopaque, _: Allocator) void {}
+        }.deinit,
+    };
+    const early_rewind = try callRewind(ctx, rewind_input);
+    switch (early_rewind) {
+        .failure => |msg| {
+            try std.testing.expectEqualStrings("No active checkpoint.", msg);
+            alloc.free(msg);
+        },
+        .success => return error.TestExpectedEqual,
+    }
+
+    // 2. Setting checkpoint succeeds
+    const cp_input = tool_dispatch.ToolInput{
+        .ptr = @constCast(&CheckpointInput{}),
+        .deinit_fn = struct {
+            fn deinit(_: *anyopaque, _: Allocator) void {}
+        }.deinit,
+    };
+    const cp_res = try callCheckpoint(ctx, cp_input);
+    switch (cp_res) {
+        .success => |msg| {
+            try std.testing.expect(std.mem.find(u8, msg, "Checkpoint set.") != null);
+            alloc.free(msg);
+        },
+        .failure => return error.TestUnexpectedFailure,
+    }
+    try std.testing.expect(try isActive(alloc, &capability));
+
+    // 3. Moving checkpoint succeeds
+    const move_ctx = tool_dispatch.DispatchContext{
+        .allocator = alloc,
+        .session_child_capability = &capability,
+        .tool_call_id = "cp-2",
+    };
+    const move_res = try callCheckpoint(move_ctx, cp_input);
+    switch (move_res) {
+        .success => |msg| {
+            try std.testing.expect(std.mem.find(u8, msg, "Checkpoint set.") != null);
+            alloc.free(msg);
+        },
+        .failure => return error.TestUnexpectedFailure,
+    }
+
+    // 4. Rewind with active checkpoint succeeds
+    const rewind_res = try callRewind(ctx, rewind_input);
+    switch (rewind_res) {
+        .success => |msg| {
+            try std.testing.expect(std.mem.find(u8, msg, "Rewind requested.") != null);
+            alloc.free(msg);
+        },
+        .failure => return error.TestUnexpectedFailure,
+    }
+
+    // 5. Complete marks phase as completed
+    try complete(alloc, &capability);
+    try std.testing.expect(!try isActive(alloc, &capability));
+
+    // 6. Rewind after completion fails
+    const post_rewind = try callRewind(ctx, rewind_input);
+    switch (post_rewind) {
+        .failure => |msg| {
+            try std.testing.expectEqualStrings("No active checkpoint.", msg);
+            alloc.free(msg);
+        },
+        .success => return error.TestExpectedEqual,
+    }
 }
