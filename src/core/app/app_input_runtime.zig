@@ -71,6 +71,8 @@ const input_full_transcript_runtime = @import("input_full_transcript_runtime.zig
 const input_selection_runtime = @import("input_selection_runtime.zig");
 const input_limit_feedback = @import("input_limit_feedback.zig");
 const app_upgrade_runtime = @import("app_upgrade_runtime.zig");
+const external_editor = @import("external_editor.zig");
+const keybindings = @import("../input/keybindings.zig");
 
 const ModelPickerStage = picker_state.ModelPickerStage;
 const ToolPermissionDecision = types.ToolPermissionDecision;
@@ -1121,6 +1123,10 @@ pub fn Runtime(comptime App: type) type {
                         try app_session_runtime.Runtime(App).openAllSessionPicker(app);
                         app.shell.render_requests.request(.footer);
                     }
+                },
+                .external_editor => {
+                    dismissActiveMenusThenRedraw(app);
+                    try external_editor.openComposerInExternalEditor(app);
                 },
                 .paste_start => dismissActiveMenusThenRedraw(app),
                 .paste_end => {},

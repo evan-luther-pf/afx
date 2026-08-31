@@ -656,7 +656,7 @@ fn resumeTerminalAfterJobControl(
     shell.render_requests.request(.first_frame);
 }
 
-fn enableInteractiveTerminalModes(shell: *TranscriptRuntime, metrics: *Metrics) !void {
+pub fn enableInteractiveTerminalModes(shell: *TranscriptRuntime, metrics: *Metrics) !void {
     try writeLifecycleTerminalBytes(
         shell,
         metrics,
@@ -1057,7 +1057,7 @@ fn setAlternateScreenMouseTracking(
     terminal.alternate_mouse_tracking_active = false;
 }
 
-fn emitShutdownCleanupAndResume(shell: *TranscriptRuntime, metrics: *Metrics) void {
+pub fn emitShutdownCleanupAndResume(shell: *TranscriptRuntime, metrics: *Metrics) void {
     if (shell.sync_updates_enabled) {
         _ = writeLifecycleTerminalBytes(shell, metrics, "\x1b[?2026l") catch {};
     }

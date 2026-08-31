@@ -345,6 +345,7 @@ fn subagentActionFromDecoded(action: input_action.Action) ?subagent_input.Action
         .toggle_full_transcript,
         .toggle_permission_mode,
         .open_all_sessions,
+        .external_editor,
         .paste_start,
         .paste_end,
         .ignore,
@@ -2367,6 +2368,12 @@ test "input escape parser handles alt+d as delete_word_right" {
     try expectEscapeAction("d", .{ .composer_shortcut = .delete_word_right });
     try expectEscapeAction("[100;3u", .delete_word_right);
     try expectEscapeAction("[27;3;100~", .delete_word_right);
+}
+
+test "input escape parser handles alt+e as external_editor" {
+    try expectEscapeAction("e", .external_editor);
+    try expectEscapeAction("[101;3u", .external_editor);
+    try expectEscapeAction("[27;3;101~", .external_editor);
 }
 
 test "input escape parser handles kitty alt+b and alt+f as word navigation" {
