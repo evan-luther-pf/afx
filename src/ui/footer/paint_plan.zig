@@ -1074,21 +1074,66 @@ fn composeTranscriptViewerFooterFrame(
     var frame = footer_viewport.ComposedFooterFrame{};
     errdefer frame.deinit(alloc);
     const width = shell.layout.cols;
-    const navigation = switch (input.ctx.transcript_depth) {
-        .review => "Review · ←/→ switch · ctrl o close · PgUp/PgDn scroll · Esc close",
-        .full => "Full detail · ←/→ switch · ctrl o close · PgUp/PgDn scroll · Esc close",
-        .inline_mode => unreachable,
-    };
-
     var navigation_row: std.ArrayList(u8) = .empty;
     try navigation_row.appendSlice(alloc, user_message_card.promptMarkerStyle());
     try row_text.appendClipped(alloc, &navigation_row, "┃", width);
     try navigation_row.appendSlice(alloc, ui_render.reset_style);
-    if (width > 1) {
-        try navigation_row.append(alloc, ' ');
-        try navigation_row.appendSlice(alloc, ui_render.statusline_style);
-        try row_text.appendSingleLineEllipsized(alloc, &navigation_row, navigation, width - 2);
-        try navigation_row.appendSlice(alloc, ui_render.reset_style);
+
+    var cursor_col: u16 = 1;
+    var cursor_visible = false;
+
+    if (shell.fullTranscriptSearchInputActive()) {
+        const query = shell.fullTranscriptSearchQuery();
+        if (width > 1) {
+            try navigation_row.append(alloc, ' ');
+            try navigation_row.append(alloc, '/');
+            try navigation_row.appendSlice(alloc, query);
+            const matches_count = shell.full_transcript.search.total_matches;
+            if (query.len > 0) {
+                if (matches_count > 0) {
+                    const active_idx = (shell.full_transcript.search.active_match_index orelse 0) + 1;
+                    var match_buf: [32]u8 = undefined;
+                    const match_text = std.fmt.bufPrint(&match_buf, " {d}/{d}", .{ active_idx, matches_count }) catch "";
+                    try navigation_row.appendSlice(alloc, ui_render.statusline_style);
+                    try navigation_row.appendSlice(alloc, match_text);
+                    try navigation_row.appendSlice(alloc, ui_render.reset_style);
+                } else {
+                    try navigation_row.appendSlice(alloc, ui_render.statusline_style);
+                    try navigation_row.appendSlice(alloc, " no matches");
+                    try navigation_row.appendSlice(alloc, ui_render.reset_style);
+                }
+            }
+        }
+        cursor_col = @intCast(@min(@as(usize, width), 3 + query.len));
+        cursor_visible = true;
+    } else if (shell.fullTranscriptSearchActive()) {
+        const query = shell.fullTranscriptSearchQuery();
+        const matches_count = shell.full_transcript.search.total_matches;
+        var nav_buf: [128]u8 = undefined;
+        const nav_text = if (matches_count > 0) blk: {
+            const active_idx = (shell.full_transcript.search.active_match_index orelse 0) + 1;
+            break :blk std.fmt.bufPrint(&nav_buf, "/{s} ({d}/{d}) · n/N next/prev · Esc clear", .{ query, active_idx, matches_count }) catch "";
+        } else blk: {
+            break :blk std.fmt.bufPrint(&nav_buf, "/{s} (no matches) · Esc clear", .{query}) catch "";
+        };
+        if (width > 1) {
+            try navigation_row.append(alloc, ' ');
+            try navigation_row.appendSlice(alloc, ui_render.statusline_style);
+            try row_text.appendSingleLineEllipsized(alloc, &navigation_row, nav_text, width - 2);
+            try navigation_row.appendSlice(alloc, ui_render.reset_style);
+        }
+    } else {
+        const navigation = switch (input.ctx.transcript_depth) {
+            .review => "Review · ←/→ switch · ctrl o close · PgUp/PgDn scroll · Esc close",
+            .full => "Full detail · ←/→ switch · ctrl o close · PgUp/PgDn scroll · Esc close",
+            .inline_mode => unreachable,
+        };
+        if (width > 1) {
+            try navigation_row.append(alloc, ' ');
+            try navigation_row.appendSlice(alloc, ui_render.statusline_style);
+            try row_text.appendSingleLineEllipsized(alloc, &navigation_row, navigation, width - 2);
+            try navigation_row.appendSlice(alloc, ui_render.reset_style);
+        }
     }
     try pushFooterBandRow(
         alloc,
@@ -1122,8 +1167,8 @@ fn composeTranscriptViewerFooterFrame(
         &status_row,
     );
 
-    frame.cursor = .{ .row = plan.footer.hint, .col = 1 };
-    frame.cursor_visible = false;
+    frame.cursor = .{ .row = plan.footer.top_divider, .col = cursor_col };
+    frame.cursor_visible = cursor_visible;
     return frame;
 }
 
@@ -1421,6 +1466,91 @@ test "transcript viewer footer keeps navigation blank row and aligns main status
         full_plan.paint.footer.top_divider,
         shell.layout.cols,
         "┃ Full detail · ←/→ switch · ctrl o close · PgUp/PgDn scroll · Esc close",
+    );
+}
+
+test "transcript viewer footer renders search input and match count" {
+    const alloc = std.testing.allocator;
+    ui_render.initTheme(false, null);
+    defer ui_render.initTheme(false, null);
+
+    var input = InputRuntime{};
+    defer input.deinit(alloc);
+
+    var shell = TranscriptRuntime{
+        .layout = .{
+            .rows = 18,
+            .cols = 40,
+            .content_bottom = 12,
+            .divider_top_row = 13,
+            .input_row = 14,
+            .divider_bottom_row = 15,
+            .hint_row = 16,
+        },
+        .owned_top_row = 1,
+        .viewport_top_row = 1,
+        .cursor_row = 8,
+        .cursor_col = 1,
+    };
+    defer shell.deinit(alloc);
+
+    shell.openFullTranscriptSearch();
+    _ = shell.full_transcript.search.appendChar('f');
+    _ = shell.full_transcript.search.appendChar('o');
+    _ = shell.full_transcript.search.appendChar('o');
+    shell.full_transcript.search.total_matches = 5;
+    shell.full_transcript.search.active_match_index = 2;
+
+    var ctx = testContext(&input);
+    ctx.transcript_depth = .review;
+    const planner_input: FooterPlannerInput = .{
+        .active_label = null,
+        .ctx = ctx,
+        .place_mid_line_active = false,
+        .input_extra = 0,
+        .input_visible = false,
+        .composer_top_chrome_rows = 0,
+        .picker_rows = 0,
+        .banner_active = false,
+    };
+    const frame_plan = planFooterPaint(&shell, planner_input);
+    var frame = try composeFooterFrame(alloc, &shell, planner_input, frame_plan.paint);
+    defer frame.deinit(alloc);
+
+    try expectFrameRowTextTrimmed(
+        &frame,
+        frame_plan.paint.footer.top_divider,
+        shell.layout.cols,
+        "┃ /foo 3/5",
+    );
+    try std.testing.expect(frame.cursor_visible);
+    try std.testing.expectEqual(frame_plan.paint.footer.top_divider, frame.cursor.row);
+    try std.testing.expectEqual(@as(u16, 6), frame.cursor.col);
+
+    // Confirmed search with matches
+    shell.confirmFullTranscriptSearch();
+    var confirmed_frame = try composeFooterFrame(alloc, &shell, planner_input, frame_plan.paint);
+    defer confirmed_frame.deinit(alloc);
+    try expectFrameRowTextTrimmed(
+        &confirmed_frame,
+        frame_plan.paint.footer.top_divider,
+        shell.layout.cols,
+        "┃ /foo (3/5) · n/N next/prev · Esc clear",
+    );
+    try std.testing.expect(!confirmed_frame.cursor_visible);
+
+    // Search with no matches
+    shell.openFullTranscriptSearch();
+    _ = shell.full_transcript.search.appendChar('x');
+    shell.full_transcript.search.total_matches = 0;
+    shell.full_transcript.search.active_match_index = null;
+    var no_match_frame = try composeFooterFrame(alloc, &shell, planner_input, frame_plan.paint);
+    defer no_match_frame.deinit(alloc);
+    try expectFrameRowTextTrimmed(
+        &no_match_frame,
+        frame_plan.paint.footer.top_divider,
+        shell.layout.cols,
+        "┃ /x no matches",
     );
 }
 

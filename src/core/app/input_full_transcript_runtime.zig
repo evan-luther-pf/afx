@@ -11,7 +11,8 @@ const approval_prompt = @import("../permissions/approval_prompt.zig");
 const subagent_runtime = @import("../../ui/subagent/runtime.zig");
 const shell_runtime = @import("../../ui/shell_runtime.zig");
 const transcript_runtime = @import("../../ui/transcript/runtime.zig");
-
+const full_transcript_screen = @import("../../ui/full_transcript_screen.zig");
+const session_child_store = @import("../session/session_child_store.zig");
 pub fn Runtime(comptime App: type) type {
     return struct {
         const FullTranscriptKey = union(enum) {
@@ -51,24 +52,136 @@ pub fn Runtime(comptime App: type) type {
             return selectedChildApprovalOwnsSurface(app);
         }
 
+        fn activePresentationShell(app: *App) ?*transcript_runtime.TranscriptRuntime {
+            if (childRouteActive(app)) {
+                if (childPresentationShell(app)) |child| return child;
+            }
+            if (comptime @hasField(App, "shell")) {
+                if (comptime @TypeOf(app.shell) == transcript_runtime.TranscriptRuntime) {
+                    return &app.shell;
+                }
+            }
+            return null;
+        }
+
+        fn getCapability(app: *App) ?*session_child_store.SessionChildCapability {
+            if (comptime @hasDecl(App, "fullTranscriptSidecarCapability")) {
+                return app.fullTranscriptSidecarCapability();
+            }
+            return null;
+        }
+
+        fn getDiffResolver(app: *App) ?full_transcript_screen.FullDiffResolver {
+            if (childRouteActive(app)) {
+                if (comptime @hasField(App, "subagents") and @hasDecl(@TypeOf(app.subagents), "childFullTranscriptDiffResolver")) {
+                    return app.subagents.childFullTranscriptDiffResolver();
+                }
+            } else if (comptime @hasDecl(App, "fullTranscriptDiffResolver")) {
+                return app.fullTranscriptDiffResolver();
+            }
+            return null;
+        }
+
         pub fn routeByte(app: *App, byte: u8) !bool {
-            const key = keyForByte(byte) orelse return false;
             if (!screenOwnsInput(app)) return false;
+            const shell = activePresentationShell(app) orelse return false;
+
+            if (shell.fullTranscriptSearchInputActive()) {
+                switch (byte) {
+                    3 => {
+                        shell.closeFullTranscriptSearch();
+                        requestActiveSurfaceFrame(app);
+                        return true;
+                    },
+                    10, 13 => {
+                        shell.confirmFullTranscriptSearch();
+                        requestActiveSurfaceFrame(app);
+                        return true;
+                    },
+                    8, 127 => {
+                        const capability = getCapability(app);
+                        const diff_resolver = getDiffResolver(app);
+                        _ = try shell.popFullTranscriptSearchChar(app.alloc, capability, diff_resolver);
+                        requestActiveSurfaceFrame(app);
+                        return true;
+                    },
+                    27 => {
+                        shell.closeFullTranscriptSearch();
+                        requestActiveSurfaceFrame(app);
+                        return true;
+                    },
+                    else => {
+                        if (byte >= 32) {
+                            const capability = getCapability(app);
+                            const diff_resolver = getDiffResolver(app);
+                            _ = try shell.appendFullTranscriptSearchChar(app.alloc, capability, diff_resolver, byte);
+                            requestActiveSurfaceFrame(app);
+                            return true;
+                        }
+                    },
+                }
+            }
+
+            switch (byte) {
+                '/' => {
+                    shell.openFullTranscriptSearch();
+                    requestActiveSurfaceFrame(app);
+                    return true;
+                },
+                'n' => {
+                    if (shell.fullTranscriptSearchActive()) {
+                        const capability = getCapability(app);
+                        const diff_resolver = getDiffResolver(app);
+                        try shell.jumpFullTranscriptSearchMatch(app.alloc, capability, diff_resolver, .next);
+                        requestActiveSurfaceFrame(app);
+                        return true;
+                    }
+                },
+                'N' => {
+                    if (shell.fullTranscriptSearchActive()) {
+                        const capability = getCapability(app);
+                        const diff_resolver = getDiffResolver(app);
+                        try shell.jumpFullTranscriptSearchMatch(app.alloc, capability, diff_resolver, .prev);
+                        requestActiveSurfaceFrame(app);
+                        return true;
+                    }
+                },
+                else => {},
+            }
+
+            const key = keyForByte(byte) orelse return false;
             try routeKey(app, key);
             return true;
         }
 
         pub fn routeAction(app: *App, resolved: input_action.Action) !bool {
-            const key = keyForAction(resolved) orelse return false;
-            switch (key) {
-                .toggle => if (childRouteActive(app)) {
+            switch (resolved) {
+                .toggle_full_transcript => if (childRouteActive(app)) {
                     if (selectedChildApprovalOwnsSurface(app)) return false;
-                    try routeKey(app, key);
+                    try routeKey(app, .toggle);
                     return true;
                 },
                 else => {},
             }
             if (!screenOwnsInput(app)) return false;
+            const shell = activePresentationShell(app);
+
+            switch (resolved) {
+                .escape => {
+                    if (shell) |s| {
+                        if (s.fullTranscriptSearchActive()) {
+                            s.closeFullTranscriptSearch();
+                            requestActiveSurfaceFrame(app);
+                            return true;
+                        }
+                    }
+                    try closeScreen(app, .escape);
+                    return true;
+                },
+                else => {},
+            }
+
+            const key = keyForAction(resolved) orelse return false;
             try routeKey(app, key);
             return true;
         }
@@ -473,4 +586,48 @@ test "approval for another child does not steal selected child transcript input"
 
     app.subagents.approval_child_id = "child-one";
     try std.testing.expect(Runtime(ApprovalRoutingApp).approvalOwnsCurrentSurface(&app));
+}
+
+test "full transcript search input routing and lifecycle" {
+    const alloc = std.testing.allocator;
+    const runtime = Runtime(ApprovalRoutingApp);
+    var app = ApprovalRoutingApp{ .alloc = alloc };
+    defer app.deinit();
+    app.shell.layout = .{
+        .rows = 24,
+        .cols = 80,
+        .content_bottom = 20,
+        .divider_top_row = 21,
+        .input_row = 22,
+        .divider_bottom_row = 23,
+        .hint_row = 24,
+    };
+    app.shell.full_transcript.depth = .review;
+
+    // Press '/' to open search
+    try std.testing.expect(try runtime.routeByte(&app, '/'));
+    try std.testing.expect(app.shell.fullTranscriptSearchInputActive());
+    try std.testing.expect(app.shell.fullTranscriptSearchActive());
+    try std.testing.expectEqualStrings("", app.shell.fullTranscriptSearchQuery());
+
+    // Type 'a', 'b', 'c'
+    try std.testing.expect(try runtime.routeByte(&app, 'a'));
+    try std.testing.expect(try runtime.routeByte(&app, 'b'));
+    try std.testing.expect(try runtime.routeByte(&app, 'c'));
+    try std.testing.expectEqualStrings("abc", app.shell.fullTranscriptSearchQuery());
+
+    // Backspace
+    try std.testing.expect(try runtime.routeByte(&app, 127));
+    try std.testing.expectEqualStrings("ab", app.shell.fullTranscriptSearchQuery());
+
+    // Enter confirms search
+    try std.testing.expect(try runtime.routeByte(&app, '\r'));
+    try std.testing.expect(!app.shell.fullTranscriptSearchInputActive());
+    try std.testing.expect(app.shell.fullTranscriptSearchActive());
+    try std.testing.expectEqualStrings("ab", app.shell.fullTranscriptSearchQuery());
+
+    // First Esc closes search
+    try std.testing.expect(try runtime.routeAction(&app, .escape));
+    try std.testing.expect(!app.shell.fullTranscriptSearchActive());
+    try std.testing.expectEqual(transcript_presentation.Depth.review, app.shell.transcriptPresentationDepth());
 }

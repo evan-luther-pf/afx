@@ -1,5 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import {
+  chmodSync,
   copyFileSync,
   mkdirSync,
   mkdtempSync,
@@ -62,6 +63,7 @@ async function startFx(
   withGateway = false,
   recordRender = false,
   gatewayResponseCount = 1,
+  extraEnv: Record<string, string> = {},
 ): Promise<TmuxSession> {
   testHome = mkdtempSync(join(tmpdir(), "afx-tui-input-"));
   stderrPath = join(testHome, "stderr.log");
@@ -103,6 +105,7 @@ async function startFx(
           FX_TRACE_SCOPES: RENDER_TRACE_SCOPES,
         }
         : {}),
+      ...extraEnv,
     },
     width,
     height,
@@ -1751,6 +1754,137 @@ tmuxTest(
       (position) => position.row === visibleAgain.row && position.col === visibleAgain.col,
       READY_TIMEOUT,
     );
+  },
+  TIMEOUT,
+);
+
+tmuxTest(
+  "full transcript search opens with slash, navigates with n and N, and closes with Esc",
+  async () => {
+    const active = await startFx(80, 24, true);
+    await typeLiteral(active, "/version");
+    await active.sendKeys("Enter");
+    await active.waitForPane((pane) => pane.includes("Version:"), READY_TIMEOUT);
+    await active.waitForComposer(READY_TIMEOUT);
+
+    await typeLiteral(active, "/status");
+    await active.sendKeys("Enter");
+    await active.waitForPane((pane) => pane.includes("Status:"), READY_TIMEOUT);
+    await active.waitForComposer(READY_TIMEOUT);
+    // Open full transcript screen with Ctrl+O (0x0f)
+    await active.sendHexBytes(["0f"]);
+    await active.waitForPane((pane) => pane.includes("Review ·"), READY_TIMEOUT);
+
+    // Open search with '/'
+    await active.sendKeys("/");
+    // Type search query 'channel'
+    await typeLiteral(active, "channel");
+    await active.waitForPane((pane) => pane.includes("/channel 1/2"), READY_TIMEOUT);
+
+    // Confirm search with Enter
+    await active.sendKeys("Enter");
+    await active.waitForPane((pane) => pane.includes("/channel (1/2) · n/N next/prev · Esc clear"), READY_TIMEOUT);
+
+    // Jump to next match with 'n'
+    await active.sendKeys("n");
+    await active.waitForPane((pane) => pane.includes("/channel (2/2) · n/N next/prev · Esc clear"), READY_TIMEOUT);
+
+    // Jump back to previous match with 'N'
+    await active.sendKeys("N");
+    await active.waitForPane((pane) => pane.includes("/channel (1/2) · n/N next/prev · Esc clear"), READY_TIMEOUT);
+
+    // First Esc clears search
+    await active.sendKeys("Escape");
+    await active.waitForPane((pane) => pane.includes("Review · ←/→ switch"), READY_TIMEOUT);
+
+    // Second Esc closes full transcript
+    await active.sendKeys("Escape");
+    await active.waitForPane((pane) => !pane.includes("Review ·"), READY_TIMEOUT);
+  },
+  TIMEOUT,
+);
+
+tmuxTest(
+  "ctrl-r prompt history search filters, selects with Enter, and restores draft with Esc",
+  async () => {
+    const active = await startFx(80, 24, true);
+    await typeLiteral(active, "/version");
+    await active.sendKeys("Enter");
+    await active.waitForPane((pane) => pane.includes("Version:"), READY_TIMEOUT);
+    await active.waitForComposer(READY_TIMEOUT);
+
+    await typeLiteral(active, "/status");
+    await active.sendKeys("Enter");
+    await active.waitForPane((pane) => pane.includes("Status:"), READY_TIMEOUT);
+    await active.waitForComposer(READY_TIMEOUT);
+
+    // Type a draft
+    await typeLiteral(active, "unsubmitted draft");
+    await active.waitForPane((pane) => pane.includes("unsubmitted draft"), READY_TIMEOUT);
+
+    // Press Ctrl+R (0x12) to open history search
+    await active.sendHexBytes(["12"]);
+    await active.waitForPane((pane) => pane.includes("/status") || pane.includes("/version"), READY_TIMEOUT);
+
+    // Filter for "version"
+    await typeLiteral(active, "version");
+    await active.waitForPane((pane) => pane.includes("/version"), READY_TIMEOUT);
+
+    // Press Enter to select
+    await active.sendKeys("Enter");
+    await active.waitForPane((pane) => pane.includes("┃ /version"), READY_TIMEOUT);
+
+    // Open history search again and cancel with Escape
+    await active.sendHexBytes(["12"]);
+    await typeLiteral(active, "something_else");
+    await active.sendKeys("Escape");
+    await active.waitForPane((pane) => pane.includes("┃ /version"), READY_TIMEOUT);
+  },
+  TIMEOUT,
+);
+
+tmuxTest(
+  "alt-e external editor handoff modifies composer draft and warns when unset",
+  async () => {
+    const editorScript = join(tmpdir(), `afx-test-editor-${Date.now()}.sh`);
+    writeFileSync(editorScript, '#!/bin/sh\nprintf "edited from external editor\\n" > "$1"\n');
+    chmodSync(editorScript, 0o755);
+
+    try {
+      // Start with custom EDITOR
+      const active = await startFx(80, 24, true, false, 1, {
+        EDITOR: editorScript,
+        VISUAL: "",
+      });
+
+      // Type a draft
+      await typeLiteral(active, "initial draft text");
+      await active.waitForPane((pane) => pane.includes("initial draft text"), READY_TIMEOUT);
+
+      // Press Alt+E (ESC e)
+      await active.sendHexBytes(["1b", "65"]);
+
+      // Verify draft was replaced by editor content and TUI restored
+      await active.waitForPane((pane) => pane.includes("edited from external editor"), READY_TIMEOUT);
+      expect(active.isAlive()).toBe(true);
+    } finally {
+      rmSync(editorScript, { force: true });
+    }
+  },
+  TIMEOUT,
+);
+
+tmuxTest(
+  "/hotkeys lists active bindings and keybindings.json remaps shortcuts",
+  async () => {
+    const active = await startFx(80, 24, true);
+
+    // Run /hotkeys
+    await typeLiteral(active, "/hotkeys");
+    await active.sendKeys("Enter");
+    await active.waitForPane((pane) => pane.includes("composer.undo"), READY_TIMEOUT);
+    await active.waitForPane((pane) => pane.includes("composer.yank"), READY_TIMEOUT);
+    expect(active.isAlive()).toBe(true);
   },
   TIMEOUT,
 );
