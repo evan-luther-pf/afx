@@ -12,6 +12,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FX_BIN, REPO_ROOT } from "../evals/eval-helpers";
 
+if (process.env.PATH && !process.env.PATH.includes("/opt/homebrew/bin")) {
+  process.env.PATH = `/opt/homebrew/bin:${process.env.PATH}`;
+}
+
 let sessionCounter = 0;
 
 export const FAKE_GATEWAY_MODEL = "openai/gpt-5";

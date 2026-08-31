@@ -75,6 +75,11 @@ Use `/model` to choose a model, `/providers` to manage accounts and keys, `/sess
 - Saves sessions, branches, plans, checkpoints, and todo state
 - Runs independent work in parallel through focused task agents
 - Supports Codex, Gemini, Anthropic, Grok, AI Gateway, and compatible providers
+- Plays audio chimes, bells, and emits OSC desktop notifications on turn completion and approvals
+- Configurable status line with toggles for context, session, workspace, cost, and git segments
+- Copies model-facing context and request payloads with /dump for debugging
+- Duplicates sessions into new independent copies with /fork
+- Exports sessions to self-contained HTML files with /export [path]
 
 ## Hashline editing
 
