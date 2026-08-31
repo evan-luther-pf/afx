@@ -738,6 +738,26 @@ fn clearTerminalTitleProvider(raw: ?*anyopaque) void {
     out.writeStreamingAll(io_mod.getIo(), "\x1b]2;\x07") catch return;
 }
 
+pub const NotificationEvent = enum {
+    turn_complete,
+    approval_needed,
+};
+
+pub const osc_notification_turn_complete = "\x1b]9;" ++ product.name ++ ": turn complete\x07";
+pub const osc_notification_approval_needed = "\x1b]9;" ++ product.name ++ ": approval needed\x07";
+
+pub fn formatOscNotification(event: NotificationEvent) []const u8 {
+    return switch (event) {
+        .turn_complete => osc_notification_turn_complete,
+        .approval_needed => osc_notification_approval_needed,
+    };
+}
+
+test "formatOscNotification produces exact OSC 9 byte sequences" {
+    try std.testing.expectEqualStrings("\x1b]9;afx: turn complete\x07", formatOscNotification(.turn_complete));
+    try std.testing.expectEqualStrings("\x1b]9;afx: approval needed\x07", formatOscNotification(.approval_needed));
+}
+
 test "terminal title writes the label to the caller's output file" {
     const alloc = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});

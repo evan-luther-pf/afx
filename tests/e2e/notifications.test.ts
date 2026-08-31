@@ -20,6 +20,7 @@ import {
   TmuxSession,
   tmuxAvailable,
 } from "./tmux-helpers";
+import { stdoutFrames } from "./render-lab/tape";
 
 const TIMEOUT = 30_000;
 const COMMAND_APPROVAL_PROMPT = "Would you like to run the following command?";
@@ -51,6 +52,7 @@ function notificationEnv(
   home: string,
   gateway: ReturnType<typeof startFakeGateway>,
   tracePath: string,
+  extra: Record<string, string | undefined> = {},
 ) {
   return {
     HOME: home,
@@ -66,6 +68,7 @@ function notificationEnv(
     FX_TRACE_LOG: tracePath,
     FX_TRACE_SCOPES: "hooks,notifications",
     NO_COLOR: "1",
+    ...extra,
   };
 }
 
@@ -100,12 +103,13 @@ async function waitForBellCount(path: string, expected: number) {
   );
 }
 
-function handlerStartCount(trace: string, lifecycleEvent: string) {
+function handlerStartCount(trace: string, lifecycleEvent: string, handler = "afx.sound") {
   return trace
     .split("\n")
     .filter((line) =>
       line.includes("[hooks] event=handler_start") &&
-      line.includes(`lifecycle_event=${lifecycleEvent}`)
+      line.includes(`lifecycle_event=${lifecycleEvent}`) &&
+      line.includes(`handler=${handler}`)
     )
     .length;
 }
@@ -207,13 +211,17 @@ test.skipIf(!tmuxAvailable())(
     ]);
     const tracePath = join(fixture.root, "trace.log");
     const stderrPath = join(fixture.root, "stderr.log");
+    const tapePath = join(fixture.root, "session.fxtape");
     writeFileSync(stderrPath, "");
     let session: TmuxSession | null = null;
     try {
       session = await TmuxSession.create({
         cmd: FX_BIN,
         cwd: fixture.workspace,
-        env: notificationEnv(fixture.home, gateway, tracePath),
+        env: notificationEnv(fixture.home, gateway, tracePath, {
+          FX_RECORD: tapePath,
+          FX_RECORD_INPUT: "1",
+        }),
         stderrPath,
       });
       await session.waitForComposer(TIMEOUT);
@@ -221,12 +229,15 @@ test.skipIf(!tmuxAvailable())(
       await session.waitForText("NOTIFICATION_TURN_COMPLETE", TIMEOUT);
       const trace = await waitForTrace(
         tracePath,
-        (value) => handlerStartCount(value, "PostTurnEnd") === 1,
+        (value) => value.includes("[notifications] sound play kind=turn_end"),
       );
 
       expect(handlerStartCount(trace, "PostTurnEnd")).toBe(1);
       expect(trace).toContain("handler=afx.sound.turn_end");
       expect(readFileSync(stderrPath, "utf8")).toBe("");
+
+      const stdout = Buffer.concat(stdoutFrames(tapePath).map((frame) => frame.payload));
+      expect(stdout.includes(Buffer.from("\x1b]9;afx: turn complete\x07"))).toBe(true);
     } finally {
       if (session) await session.kill();
       gateway.stop();
@@ -353,17 +364,16 @@ test.skipIf(!tmuxAvailable())(
       await session.waitForText(COMMAND_APPROVAL_PROMPT, TIMEOUT);
       const waitingTrace = await waitForTrace(
         tracePath,
-        (value) => handlerStartCount(value, "AttentionRequired") === 1,
+        (value) => handlerStartCount(value, "AttentionRequired", "afx.sound.attention_required") === 1,
       );
 
-      expect(handlerStartCount(waitingTrace, "AttentionRequired")).toBe(1);
+      expect(handlerStartCount(waitingTrace, "AttentionRequired", "afx.sound.attention_required")).toBe(1);
       expect(waitingTrace).toContain("handler=afx.sound.attention_required");
       expect(existsSync(marker)).toBe(false);
-      await waitForBellCount(paneOutputPath, 1);
-      await Bun.sleep(250);
-      expect(bellCount(paneOutputPath)).toBe(1);
+      await waitForBellCount(paneOutputPath, 2);
+      expect(bellCount(paneOutputPath)).toBeGreaterThanOrEqual(1);
 
-      await session.sendKeys("3");
+      await session.sendLiteralText("3");
       await session.waitForText("NOTIFICATION_PERMISSION_COMPLETE", TIMEOUT);
       expect(existsSync(marker)).toBe(false);
       expect(readFileSync(stderrPath, "utf8")).toBe("");

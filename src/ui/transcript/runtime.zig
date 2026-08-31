@@ -9206,6 +9206,22 @@ pub const TranscriptRuntime = struct {
         }
     }
 
+    pub fn writeNotificationOsc(
+        self: *TranscriptRuntime,
+        metrics: *Metrics,
+        event: ui_render.NotificationEvent,
+    ) void {
+        const bytes = ui_render.formatOscNotification(event);
+        switch (transcript_io.writeFrameBytes(self, metrics, bytes)) {
+            .complete => {},
+            .partial => |partial| debug_trace.logf(
+                "notifications",
+                "terminal osc notification write failed accepted_bytes={d} err={s}",
+                .{ partial.accepted_bytes, @errorName(partial.err) },
+            ),
+        }
+    }
+
     fn writeFrameSink(ctx: *anyopaque, metrics: *Metrics, bytes: []const u8) render_engine.terminal_diff.FrameSinkWriteResult {
         const self: *TranscriptRuntime = @ptrCast(@alignCast(ctx));
         return transcript_io.writeFrameBytes(self, metrics, bytes);
@@ -12025,6 +12041,27 @@ test "notification bell writes standalone BEL bytes" {
         try file.readPositionalAll(io_mod.getIo(), &bytes, 0),
     );
     try std.testing.expectEqualSlices(u8, "\x07", &bytes);
+}
+
+test "writeNotificationOsc writes the exact OSC 9 escape sequence" {
+    const alloc = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const file = try tmp.dir.createFile(std.testing.io, "notification-osc.log", .{ .read = true });
+    defer file.close(io_mod.getIo());
+
+    var runtime = TranscriptRuntime{ .stdout_file = file };
+    defer runtime.deinit(alloc);
+    var metrics: Metrics = .{};
+    runtime.writeNotificationOsc(&metrics, .turn_complete);
+    runtime.writeNotificationOsc(&metrics, .approval_needed);
+
+    var read_file = try tmp.dir.openFile(io_mod.getIo(), "notification-osc.log", .{});
+    defer read_file.close(io_mod.getIo());
+    const written = try io_mod.readFileToEnd(alloc, &read_file, 128);
+    defer alloc.free(written);
+    try std.testing.expectEqualStrings("\x1b]9;afx: turn complete\x07\x1b]9;afx: approval needed\x07", written);
 }
 
 test {

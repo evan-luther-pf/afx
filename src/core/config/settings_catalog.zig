@@ -299,12 +299,13 @@ const specs = [_]Spec{
     .{ .id = .agent_spawns, .category = .agents, .label = "Spawns", .description = "false, *, or comma-separated agent names" },
     .{ .id = .spawn_depth, .category = .agents, .label = "Spawn depth", .description = "AFX_MAX_SPAWN_DEPTH; -1 means unlimited" },
     .{ .id = .hub_wait, .category = .agents, .label = "Hub wait default", .description = "Default wait timeout; each hub call may override it" },
-    .{ .id = .sound_level, .category = .notifications, .label = "Sound level", .description = "Choose off, on, or max sounds and terminal bells" },
+    .{ .id = .sound_level, .category = .notifications, .label = "Sound level", .description = "Choose off, on, or max sounds and desktop notifications" },
     .{ .id = .startup_scrollback, .category = .advanced, .label = "Startup scrollback", .description = "Restore terminal output when afx starts" },
     .{ .id = .prompt_history, .category = .advanced, .label = "Prompt history", .description = "Save accepted prompts and slash commands for composer history" },
 };
 
 const on_off_options = [_][]const u8{ "off", "on" };
+const theme_options = [_][]const u8{ "auto", "dark", "light" };
 const permission_options = [_][]const u8{ "ask", "auto", "yolo" };
 const sound_level_options = [_][]const u8{ "off", "on", "max" };
 const tool_display_options = [_][]const u8{ "compact", "visual" };
