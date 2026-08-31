@@ -64,7 +64,9 @@ async function disablePromptHistory(
 ): Promise<void> {
   await session.sendText("/settings");
   await session.waitForText("←→ Change", TIMEOUT);
-  for (let index = 0; index < 20; index += 1) {
+  for (let index = 0; index < 35; index += 1) {
+    const escapes = await session.capturePaneEscapes();
+    if (escapes.includes("\u001b[1m\u001b[38;5;255mPrompt history")) break;
     await session.sendKeys("Down");
   }
   await session.sendKeys("Left");

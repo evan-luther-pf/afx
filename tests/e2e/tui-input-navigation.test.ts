@@ -1808,26 +1808,24 @@ tmuxTest(
   "ctrl-r prompt history search filters, selects with Enter, and restores draft with Esc",
   async () => {
     const active = await startFx(80, 24, true);
-    await typeLiteral(active, "/version");
-    await active.sendKeys("Enter");
+    await active.sendText("/version");
     await active.waitForPane((pane) => pane.includes("Version:"), READY_TIMEOUT);
     await active.waitForComposer(READY_TIMEOUT);
 
-    await typeLiteral(active, "/status");
-    await active.sendKeys("Enter");
+    await active.sendText("/status");
     await active.waitForPane((pane) => pane.includes("Status:"), READY_TIMEOUT);
     await active.waitForComposer(READY_TIMEOUT);
 
     // Type a draft
-    await typeLiteral(active, "unsubmitted draft");
+    await active.sendLiteral("unsubmitted draft");
     await active.waitForPane((pane) => pane.includes("unsubmitted draft"), READY_TIMEOUT);
 
-    // Press Ctrl+R (0x12) to open history search
-    await active.sendHexBytes(["12"]);
+    // Press Ctrl+R (C-r) to open history search
+    await active.sendKeys("C-r");
     await active.waitForPane((pane) => pane.includes("/status") || pane.includes("/version"), READY_TIMEOUT);
 
     // Filter for "version"
-    await typeLiteral(active, "version");
+    await active.sendLiteral("version");
     await active.waitForPane((pane) => pane.includes("/version"), READY_TIMEOUT);
 
     // Press Enter to select
@@ -1835,8 +1833,8 @@ tmuxTest(
     await active.waitForPane((pane) => pane.includes("┃ /version"), READY_TIMEOUT);
 
     // Open history search again and cancel with Escape
-    await active.sendHexBytes(["12"]);
-    await typeLiteral(active, "something_else");
+    await active.sendKeys("C-r");
+    await active.sendLiteral("something_else");
     await active.sendKeys("Escape");
     await active.waitForPane((pane) => pane.includes("┃ /version"), READY_TIMEOUT);
   },
