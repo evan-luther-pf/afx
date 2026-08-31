@@ -1807,13 +1807,13 @@ tmuxTest(
 tmuxTest(
   "ctrl-r prompt history search filters, selects with Enter, and restores draft with Esc",
   async () => {
-    const active = await startFx(80, 24, true);
-    await active.sendText("/version");
-    await active.waitForPane((pane) => pane.includes("Version:"), READY_TIMEOUT);
+    const active = await startFx(80, 24, true, false, 2);
+    await active.sendText("echo first prompt");
+    await active.waitForText("history prompt complete", READY_TIMEOUT);
     await active.waitForComposer(READY_TIMEOUT);
 
-    await active.sendText("/status");
-    await active.waitForPane((pane) => pane.includes("Status:"), READY_TIMEOUT);
+    await active.sendText("echo second prompt");
+    await active.waitForText("history prompt complete", READY_TIMEOUT);
     await active.waitForComposer(READY_TIMEOUT);
 
     // Type a draft
@@ -1822,21 +1822,21 @@ tmuxTest(
 
     // Press Ctrl+R (C-r) to open history search
     await active.sendKeys("C-r");
-    await active.waitForPane((pane) => pane.includes("/status") || pane.includes("/version"), READY_TIMEOUT);
+    await active.waitForPane((pane) => pane.includes("first prompt") || pane.includes("second prompt"), READY_TIMEOUT);
 
-    // Filter for "version"
-    await active.sendLiteral("version");
-    await active.waitForPane((pane) => pane.includes("/version"), READY_TIMEOUT);
+    // Filter for "first"
+    await active.sendLiteral("first");
+    await active.waitForPane((pane) => pane.includes("first prompt"), READY_TIMEOUT);
 
     // Press Enter to select
     await active.sendKeys("Enter");
-    await active.waitForPane((pane) => pane.includes("┃ /version"), READY_TIMEOUT);
+    await active.waitForPane((pane) => pane.includes("┃ echo first prompt"), READY_TIMEOUT);
 
     // Open history search again and cancel with Escape
     await active.sendKeys("C-r");
     await active.sendLiteral("something_else");
     await active.sendKeys("Escape");
-    await active.waitForPane((pane) => pane.includes("┃ /version"), READY_TIMEOUT);
+    await active.waitForPane((pane) => pane.includes("┃ echo first prompt"), READY_TIMEOUT);
   },
   TIMEOUT,
 );
