@@ -363,6 +363,10 @@ pub fn CompletionRuntime(comptime App: type) type {
         }
 
         fn routeNonSlashPickerMove(app: *App, delta: i32) bool {
+            if (app.input_runtime.picker.history_search_active) {
+                navigateHistoryPicker(app, delta);
+                return true;
+            }
             if (routeSettingsMenuMove(app, delta)) return true;
             if (routeHelpMenuMove(app, delta)) return true;
             if (routeModelMenuMove(app, delta)) return true;
@@ -383,6 +387,22 @@ pub fn CompletionRuntime(comptime App: type) type {
             // Mid-turn bare `/model`: consume arrows without slash/skill navigation.
             if (app.stream.active and picker_state.isBareModelCommandAtCursor(&app.input_runtime.edit_state)) return true;
             return false;
+        }
+
+        pub fn navigateHistoryPicker(app: *App, delta: i32) void {
+            var filtered_buf: [128][]const u8 = undefined;
+            const count = picker_state.filterHistoryEntries(
+                app.input_runtime.composer_history.entries.items,
+                app.input_runtime.edit_state.input.items,
+                &filtered_buf,
+            );
+            if (count == 0) return;
+            const current = app.input_runtime.picker.history_selection_index;
+            const next = if (delta < 0)
+                if (current == 0) count - 1 else current - 1
+            else
+                (current + 1) % count;
+            app.input_runtime.picker.history_selection_index = next;
         }
 
         fn routeSettingsMenuMove(app: *App, delta: i32) bool {

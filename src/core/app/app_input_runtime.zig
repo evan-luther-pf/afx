@@ -1374,6 +1374,33 @@ pub fn Runtime(comptime App: type) type {
             max_input_len: usize,
             max_prompt_history: usize,
         ) !void {
+            if (keybindings.getGlobalKeymap().actionForControlByte(byte)) |action_id| {
+                switch (action_id) {
+                    .@"composer.history_search" => {
+                        if (app.input_runtime.picker.history_search_active) {
+                            completion_rt.navigateHistoryPicker(app, 1);
+                            app.shell.render_requests.request(.footer);
+                            return;
+                        }
+                        try app.input_runtime.picker.beginHistorySearch(
+                            app.alloc,
+                            app.input_runtime.edit_state.input.items,
+                            app.input_runtime.edit_state.cursor,
+                        );
+                        app.input_runtime.edit_state.clearRetainingCapacity();
+                        app.shell.render_requests.request(.footer);
+                        return;
+                    },
+                    .@"app.subagents" => {
+                        if (settingsMenuActive(app) or helpMenuActive(app) or skillsMenuActive(app) or modelMenuActive(app) or sessionMenuActive(app)) return;
+                        if (comptime runtime_profile.allows(App, .subagents)) {
+                            try subagent_rt.toggleSubagentView(app);
+                        }
+                        return;
+                    },
+                    else => {},
+                }
+            }
             switch (byte) {
                 3 => {
                     try handleSemanticCtrlC(app);
@@ -1455,13 +1482,26 @@ pub fn Runtime(comptime App: type) type {
                 22 => {
                     try image_commands.Commands(App).attachClipboard(app);
                 },
-                24 => {
-                    if (settingsMenuActive(app) or helpMenuActive(app) or skillsMenuActive(app) or modelMenuActive(app) or sessionMenuActive(app)) return;
-                    if (comptime runtime_profile.allows(App, .subagents)) {
-                        try subagent_rt.toggleSubagentView(app);
-                    }
-                },
                 '\r' => {
+                    if (app.input_runtime.picker.history_search_active) {
+                        var filtered_buf: [128][]const u8 = undefined;
+                        const count = picker_state.filterHistoryEntries(
+                            app.input_runtime.composer_history.entries.items,
+                            app.input_runtime.edit_state.input.items,
+                            &filtered_buf,
+                        );
+                        if (count > 0) {
+                            const selected_idx = app.input_runtime.picker.history_selection_index % count;
+                            const chosen = filtered_buf[selected_idx];
+                            try app.input_runtime.textReplacementState().replace(app.alloc, chosen);
+                        } else if (app.input_runtime.picker.history_saved_draft) |draft| {
+                            try app.input_runtime.textReplacementState().replace(app.alloc, draft.text.items);
+                            app.input_runtime.edit_state.cursor = @min(draft.cursor, app.input_runtime.edit_state.input.items.len);
+                        }
+                        app.input_runtime.picker.clearHistorySearch(app.alloc);
+                        app.shell.render_requests.request(.footer);
+                        return;
+                    }
                     if (try submitSettingsMenuSelection(app)) return;
                     if (try submitHelpMenuSelection(app, max_input_len, max_prompt_history)) return;
                     if (try submitAuthPickerSelection(app)) return;
@@ -2518,6 +2558,11 @@ pub fn Runtime(comptime App: type) type {
                     _ = disarmEscapeClear(app);
                     return;
                 }
+                if (cancelHistorySearch(app)) {
+                    _ = disarmEscapeClear(app);
+                    app.shell.render_requests.request(.footer);
+                    return;
+                }
                 if (cancelCompactCommandMenu(app) or cancelSettingsMenu(app) or cancelHelpMenu(app) or cancelModelMenu(app) or cancelSkillsMenu(app) or cancelSessionMenu(app)) {
                     _ = disarmEscapeClear(app);
                     app.shell.render_requests.request(.footer);
@@ -2556,6 +2601,11 @@ pub fn Runtime(comptime App: type) type {
                     );
                     return;
                 }
+            }
+            if (cancelHistorySearch(app)) {
+                _ = disarmEscapeClear(app);
+                app.shell.render_requests.request(.footer);
+                return;
             }
             if (cancelCompactCommandMenu(app) or cancelSettingsMenu(app) or cancelHelpMenu(app) or cancelModelMenu(app) or cancelSkillsMenu(app) or cancelSessionMenu(app)) {
                 _ = disarmEscapeClear(app);
@@ -2598,6 +2648,16 @@ pub fn Runtime(comptime App: type) type {
             } else {
                 app.shell.render_requests.request(.footer);
             }
+        }
+
+        fn cancelHistorySearch(app: *App) bool {
+            if (!app.input_runtime.picker.history_search_active) return false;
+            if (app.input_runtime.picker.history_saved_draft) |draft| {
+                app.input_runtime.textReplacementState().replace(app.alloc, draft.text.items) catch {};
+                app.input_runtime.edit_state.cursor = @min(draft.cursor, app.input_runtime.edit_state.input.items.len);
+            }
+            app.input_runtime.picker.clearHistorySearch(app.alloc);
+            return true;
         }
 
         fn cancelSkillsMenu(app: *App) bool {
@@ -9372,6 +9432,51 @@ test "app_input_runtime skills catalog owns ctrl-x without activating subagents"
     try std.testing.expect(app.skills.menu.active);
     try std.testing.expect(!app.subagents.isViewActive());
     try std.testing.expectEqual(@as(usize, 0), app.subagents.toggle_view_calls);
+}
+
+test "app_input_runtime ctrl-r prompt history search routing, selection, and escape restore" {
+    const alloc = std.testing.allocator;
+    var app = try RoutingFakeApp.init(alloc);
+    defer app.deinit();
+
+    try app.input_runtime.composer_history.installTextEntries(alloc, &.{
+        "git status",
+        "git commit -m \"first\"",
+        "npm test",
+        "git commit -m \"second\"",
+    });
+
+    // User types draft
+    try app.input_runtime.edit_state.setText(alloc, "my uncommitted draft");
+
+    // Press Ctrl+R (byte 18)
+    try Runtime(RoutingFakeApp).handleByte(&app, 18, 4096, 100);
+    try std.testing.expect(app.input_runtime.picker.history_search_active);
+    try std.testing.expectEqualStrings("", app.input_runtime.edit_state.input.items);
+    try std.testing.expectEqualStrings("my uncommitted draft", app.input_runtime.picker.history_saved_draft.?.text.items);
+
+    // Filter for "commit"
+    try feedRoutingBytes(&app, "commit");
+    try std.testing.expectEqualStrings("commit", app.input_runtime.edit_state.input.items);
+
+    // Press Ctrl+R again to move to next older match (selection index 1)
+    try Runtime(RoutingFakeApp).handleByte(&app, 18, 4096, 100);
+    try std.testing.expectEqual(@as(usize, 1), app.input_runtime.picker.history_selection_index);
+
+    // Press Enter to confirm selection
+    try Runtime(RoutingFakeApp).handleByte(&app, '\r', 4096, 100);
+    try std.testing.expect(!app.input_runtime.picker.history_search_active);
+    try std.testing.expectEqualStrings("git commit -m \"first\"", app.input_runtime.edit_state.input.items);
+    try std.testing.expectEqual(app.input_runtime.edit_state.input.items.len, app.input_runtime.edit_state.cursor);
+
+    // Open history search again and cancel with Escape to restore draft
+    try Runtime(RoutingFakeApp).handleByte(&app, 18, 4096, 100);
+    try std.testing.expect(app.input_runtime.picker.history_search_active);
+    try feedRoutingBytes(&app, "xyz");
+
+    try Runtime(RoutingFakeApp).resolveEscape(&app, false, 100);
+    try std.testing.expect(!app.input_runtime.picker.history_search_active);
+    try std.testing.expectEqualStrings("git commit -m \"first\"", app.input_runtime.edit_state.input.items);
 }
 
 test "app_input_runtime skills catalog owns the all-sessions shortcut" {

@@ -61,7 +61,7 @@ fn navigationTarget(index: ?usize, entry_count: usize, delta: i32) NavigationTar
     return .draft;
 }
 
-const Snapshot = struct {
+pub const Snapshot = struct {
     text: std.ArrayList(u8) = .empty,
     pasted_blocks: std.ArrayList(paste_blocks.PastedBlock) = .empty,
     images: std.ArrayList(types.ImageAttachment) = .empty,
