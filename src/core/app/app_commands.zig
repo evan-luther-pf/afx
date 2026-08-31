@@ -3713,6 +3713,11 @@ pub fn settingsCatalogSnapshot(app: anytype) settings_catalog.Snapshot {
             notifications.max,
         );
     }
+    if (comptime @hasField(App, "theme_name")) {
+        snapshot.theme = app.theme_name;
+    } else {
+        snapshot.theme = ui_render.current_theme.getName();
+    }
     return snapshot;
 }
 

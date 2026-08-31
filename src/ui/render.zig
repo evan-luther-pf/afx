@@ -21,9 +21,15 @@ pub const bold_style = "\x1b[1m";
 pub const app_name = "afx";
 pub const right_tag = "/afx";
 pub const ask_activity_label = "⏺ Asking";
-
+pub const theme_mod = @import("theme.zig");
+pub const Theme = theme_mod.Theme;
+pub const Token = theme_mod.Token;
+pub const default_dark_theme = theme_mod.default_dark_theme;
+pub const default_light_theme = theme_mod.default_light_theme;
+pub const loadTheme = theme_mod.loadTheme;
+pub const listAvailableThemes = theme_mod.listAvailableThemes;
 const user_message_card = @import("assistant/user_message_card.zig");
-
+const code_highlight = @import("render_engine/code_highlight.zig");
 pub const welcome_message_reserved_rows: u16 = 11;
 
 pub var is_light: bool = false;
@@ -63,29 +69,47 @@ pub fn setTruecolorSupport(enabled: bool) void {
     truecolor_enabled = enabled;
 }
 
-pub fn initTheme(light: bool, terminal_bg: ?TerminalRgb) void {
+pub var current_theme: Theme = default_dark_theme;
+
+var divider_style_buf: [32]u8 = undefined;
+var hint_style_buf: [32]u8 = undefined;
+var statusline_style_buf: [32]u8 = undefined;
+var tag_style_buf: [32]u8 = undefined;
+var subtitle_style_buf: [32]u8 = undefined;
+var system_notice_label_style_buf: [32]u8 = undefined;
+var system_notice_text_style_buf: [32]u8 = undefined;
+var dim_style_buf: [32]u8 = undefined;
+var warning_style_buf: [32]u8 = undefined;
+var green_style_buf: [32]u8 = undefined;
+var red_style_buf: [32]u8 = undefined;
+var diff_added_style_buf: [32]u8 = undefined;
+var diff_removed_style_buf: [32]u8 = undefined;
+var diff_added_marker_style_buf: [32]u8 = undefined;
+var diff_removed_marker_style_buf: [32]u8 = undefined;
+var approval_button_active_style_buf: [64]u8 = undefined;
+var approval_button_inactive_style_buf: [64]u8 = undefined;
+var selected_completion_style_buf: [32]u8 = undefined;
+var permission_auto_style_buf: [32]u8 = undefined;
+var user_marker_buf: [32]u8 = undefined;
+var user_accent_buf: [32]u8 = undefined;
+var md_code_buf: [32]u8 = undefined;
+var task_comp_buf: [32]u8 = undefined;
+var syn_kw_buf: [32]u8 = undefined;
+var syn_str_buf: [32]u8 = undefined;
+var syn_num_buf: [32]u8 = undefined;
+var syn_comm_buf: [32]u8 = undefined;
+var text_fg_buf: [32]u8 = undefined;
+var accent_fg_buf: [32]u8 = undefined;
+var bg_buf1: [32]u8 = undefined;
+var fg_buf1: [32]u8 = undefined;
+var bg_buf2: [32]u8 = undefined;
+var fg_buf2: [32]u8 = undefined;
+pub fn applyTheme(theme: *const Theme, light: bool, terminal_bg: ?TerminalRgb) void {
+    current_theme = theme.*;
     is_light = light;
     active_terminal_background = terminal_bg;
-    assistant_presentation.setInlineCodeTheme(light);
-    if (light) {
-        divider_style = "\x1b[38;5;250m";
-        hint_style = "\x1b[38;5;235m";
-        statusline_style = "\x1b[38;5;241m";
-        tag_style = "\x1b[1;38;5;235m";
-        subtitle_style = "\x1b[1;38;5;235m";
-        system_notice_label_style = "\x1b[1;38;5;238m";
-        system_notice_text_style = "\x1b[38;5;241m";
-        dim_style = "\x1b[38;5;247m";
-        warning_style = "\x1b[38;5;238m";
-        green_style = "\x1b[38;5;238m";
-        red_style = "\x1b[38;5;238m";
-        diff_added_style = "\x1b[38;5;238m";
-        diff_removed_style = "\x1b[38;5;238m";
-        approval_button_active_style = "\x1b[48;5;236m\x1b[38;5;255m\x1b[1m";
-        approval_button_inactive_style = "\x1b[48;5;251m\x1b[38;5;237m";
-        selected_completion_style = "\x1b[1;38;5;235m";
-        permission_auto_style = "\x1b[38;5;238m";
-    } else {
+
+    if (std.mem.eql(u8, theme.getName(), "dark")) {
         divider_style = "\x1b[38;5;240m";
         hint_style = "\x1b[38;5;255m";
         statusline_style = "\x1b[38;5;245m";
@@ -103,21 +127,98 @@ pub fn initTheme(light: bool, terminal_bg: ?TerminalRgb) void {
         approval_button_inactive_style = "\x1b[48;5;239m\x1b[38;5;255m";
         selected_completion_style = "\x1b[1;38;5;255m";
         permission_auto_style = "\x1b[38;5;252m";
-    }
+        diff_added_marker_style = if (truecolor_enabled) diff_added_marker_truecolor else diff_added_marker_fallback;
+        diff_removed_marker_style = if (truecolor_enabled) diff_removed_marker_truecolor else diff_removed_marker_fallback;
 
-    // The diff marker green/red reads the same on light and dark, so it is set
-    // once here rather than per-theme.
-    if (truecolor_enabled) {
-        diff_added_marker_style = diff_added_marker_truecolor;
-        diff_removed_marker_style = diff_removed_marker_truecolor;
+        assistant_presentation.setInlineCodeTheme(false);
+        user_message_card.setStyle(false, terminal_bg);
+        code_highlight.setCustomPalette(null, false);
+    } else if (std.mem.eql(u8, theme.getName(), "light")) {
+        divider_style = "\x1b[38;5;250m";
+        hint_style = "\x1b[38;5;235m";
+        statusline_style = "\x1b[38;5;241m";
+        tag_style = "\x1b[1;38;5;235m";
+        subtitle_style = "\x1b[1;38;5;235m";
+        system_notice_label_style = "\x1b[1;38;5;238m";
+        system_notice_text_style = "\x1b[38;5;241m";
+        dim_style = "\x1b[38;5;247m";
+        warning_style = "\x1b[38;5;238m";
+        green_style = "\x1b[38;5;238m";
+        red_style = "\x1b[38;5;238m";
+        diff_added_style = "\x1b[38;5;238m";
+        diff_removed_style = "\x1b[38;5;238m";
+        approval_button_active_style = "\x1b[48;5;236m\x1b[38;5;255m\x1b[1m";
+        approval_button_inactive_style = "\x1b[48;5;251m\x1b[38;5;237m";
+        selected_completion_style = "\x1b[1;38;5;235m";
+        permission_auto_style = "\x1b[38;5;238m";
+        diff_added_marker_style = if (truecolor_enabled) diff_added_marker_truecolor else diff_added_marker_fallback;
+        diff_removed_marker_style = if (truecolor_enabled) diff_removed_marker_truecolor else diff_removed_marker_fallback;
+
+        assistant_presentation.setInlineCodeTheme(true);
+        user_message_card.setStyle(true, terminal_bg);
+        code_highlight.setCustomPalette(null, true);
     } else {
-        diff_added_marker_style = diff_added_marker_fallback;
-        diff_removed_marker_style = diff_removed_marker_fallback;
-    }
+        divider_style = theme.get(.border).formatAnsiFg(&divider_style_buf, truecolor_enabled);
+        hint_style = theme.get(.text).formatAnsiFg(&hint_style_buf, truecolor_enabled);
+        statusline_style = theme.get(.muted).formatAnsiFg(&statusline_style_buf, truecolor_enabled);
+        dim_style = theme.get(.dim).formatAnsiFg(&dim_style_buf, truecolor_enabled);
+        warning_style = theme.get(.warning).formatAnsiFg(&warning_style_buf, truecolor_enabled);
+        green_style = theme.get(.success).formatAnsiFg(&green_style_buf, truecolor_enabled);
+        red_style = theme.get(.error_color).formatAnsiFg(&red_style_buf, truecolor_enabled);
+        diff_added_style = theme.get(.diff_added).formatAnsiFg(&diff_added_style_buf, truecolor_enabled);
+        diff_removed_style = theme.get(.diff_removed).formatAnsiFg(&diff_removed_style_buf, truecolor_enabled);
+        diff_added_marker_style = theme.get(.diff_added_marker).formatAnsiFg(&diff_added_marker_style_buf, truecolor_enabled);
+        diff_removed_marker_style = theme.get(.diff_removed_marker).formatAnsiFg(&diff_removed_marker_style_buf, truecolor_enabled);
 
-    user_message_card.setStyle(light, terminal_bg);
+        tag_style = theme.get(.text).formatAnsiBoldFg(&tag_style_buf, truecolor_enabled);
+        subtitle_style = theme.get(.text).formatAnsiBoldFg(&subtitle_style_buf, truecolor_enabled);
+        system_notice_label_style = theme.get(.accent).formatAnsiBoldFg(&system_notice_label_style_buf, truecolor_enabled);
+        system_notice_text_style = theme.get(.tool_output).formatAnsiFg(&system_notice_text_style_buf, truecolor_enabled);
+
+        approval_button_active_style = std.fmt.bufPrint(&approval_button_active_style_buf, "{s}{s}\x1b[1m", .{
+            theme.get(.text).formatAnsiBg(&bg_buf1, truecolor_enabled),
+            theme.get(.border).formatAnsiFg(&fg_buf1, truecolor_enabled),
+        }) catch "";
+
+        approval_button_inactive_style = std.fmt.bufPrint(&approval_button_inactive_style_buf, "{s}{s}", .{
+            theme.get(.border).formatAnsiBg(&bg_buf2, truecolor_enabled),
+            theme.get(.text).formatAnsiFg(&fg_buf2, truecolor_enabled),
+        }) catch "";
+        selected_completion_style = theme.get(.text).formatAnsiBoldFg(&selected_completion_style_buf, truecolor_enabled);
+        permission_auto_style = theme.get(.accent).formatAnsiFg(&permission_auto_style_buf, truecolor_enabled);
+
+        user_message_card.setCustomStyle(
+            theme.get(.user_marker).formatAnsiFg(&user_marker_buf, truecolor_enabled),
+            theme.get(.accent).formatAnsiFg(&user_accent_buf, truecolor_enabled),
+        );
+
+        assistant_presentation.setCustomInlineCodeStyle(
+            theme.get(.md_code).formatAnsiFg(&md_code_buf, truecolor_enabled),
+            theme.get(.success).formatAnsiFg(&task_comp_buf, truecolor_enabled),
+        );
+
+        code_highlight.setCustomPalette(.{
+            .keyword_style = theme.get(.syntax_keyword).formatAnsiFg(&syn_kw_buf, truecolor_enabled),
+            .string_style = theme.get(.syntax_string).formatAnsiFg(&syn_str_buf, truecolor_enabled),
+            .number_style = theme.get(.syntax_number).formatAnsiFg(&syn_num_buf, truecolor_enabled),
+            .comment_style = theme.get(.syntax_comment).formatAnsiFg(&syn_comm_buf, truecolor_enabled),
+        }, light);
+    }
 }
 
+pub fn initTheme(light: bool, terminal_bg: ?TerminalRgb) void {
+    initThemeNamed("auto", light, terminal_bg);
+}
+
+pub fn initThemeNamed(theme_name: []const u8, light: bool, terminal_bg: ?TerminalRgb) void {
+    const home = io_mod.getenv("HOME");
+    var effective_name = theme_name;
+    if (theme_detection.explicitThemeName()) |override| {
+        effective_name = override;
+    }
+    const theme = theme_mod.loadTheme(std.heap.c_allocator, home, effective_name, light);
+    applyTheme(&theme, light, terminal_bg);
+}
 pub fn themeNeedsUpdate(light: bool, terminal_bg: ?TerminalRgb) bool {
     if (light != is_light) return true;
     const background = terminal_bg orelse return false;

@@ -10,12 +10,23 @@ pub const Theme = enum {
     light,
 };
 
-const Palette = struct {
+pub const Palette = struct {
     keyword_style: []const u8,
     string_style: []const u8,
     number_style: []const u8,
     comment_style: []const u8,
 };
+
+var custom_dark_palette: ?Palette = null;
+var custom_light_palette: ?Palette = null;
+
+pub fn setCustomPalette(palette: ?Palette, light: bool) void {
+    if (light) {
+        custom_light_palette = palette;
+    } else {
+        custom_dark_palette = palette;
+    }
+}
 
 const dark_palette: Palette = .{
     .keyword_style = "\x1b[38;5;252m",
@@ -33,8 +44,8 @@ const light_palette: Palette = .{
 
 fn paletteForTheme(theme: Theme) Palette {
     return switch (theme) {
-        .dark => dark_palette,
-        .light => light_palette,
+        .dark => custom_dark_palette orelse dark_palette,
+        .light => custom_light_palette orelse light_palette,
     };
 }
 
