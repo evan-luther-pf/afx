@@ -1,5 +1,6 @@
 const std = @import("std");
 const input_action = @import("../../core/input/input_action.zig");
+const keybindings = @import("../../core/input/keybindings.zig");
 
 const InputEscapeAction = input_action.Action;
 const ShortcutAction = input_action.ShortcutAction;
@@ -8,21 +9,39 @@ fn move(kind: input_action.MoveKind) ShortcutAction {
     return .{ .move = .{ .kind = kind } };
 }
 
+fn actionIdToShortcut(action: keybindings.ActionId) ?ShortcutAction {
+    return switch (action) {
+        .@"composer.history_previous" => .history_previous,
+        .@"composer.history_next" => .history_next,
+        .@"composer.line_start" => move(.line_start),
+        .@"composer.line_end" => move(.line_end),
+        .@"composer.character_left" => move(.character_left),
+        .@"composer.character_right" => move(.character_right),
+        .@"composer.word_left" => move(.word_left),
+        .@"composer.word_right" => move(.word_right),
+        .@"composer.delete_forward" => .delete_forward,
+        .@"composer.delete_backward" => .delete_backward,
+        .@"composer.delete_word_left" => .delete_word_left,
+        .@"composer.delete_whitespace_word_left" => .delete_whitespace_word_left,
+        .@"composer.delete_word_right" => .delete_word_right,
+        .@"composer.delete_to_line_start" => .delete_to_line_start,
+        .@"composer.delete_to_line_end" => .delete_to_line_end,
+        .@"composer.yank" => .yank,
+        .@"composer.undo" => .undo,
+        .@"composer.redo" => .redo,
+        .@"composer.select_all" => .select_all,
+        .@"composer.copy_selection" => .copy_selection,
+        .@"composer.cut_selection" => .cut_selection,
+        .@"composer.insert_newline" => .insert_newline,
+        .@"app.clear_screen" => .redraw,
+        else => null,
+    };
+}
 pub fn fromControlByte(byte: u8) ?ShortcutAction {
+    if (keybindings.getGlobalKeymap().actionForControlByte(byte)) |action_id| {
+        if (actionIdToShortcut(action_id)) |shortcut| return shortcut;
+    }
     return switch (byte) {
-        1 => move(.line_start),
-        5 => move(.line_end),
-        2 => move(.character_left),
-        6 => move(.character_right),
-        16 => .history_previous,
-        14 => .history_next,
-        4 => .delete_forward,
-        11 => .delete_to_line_end,
-        21 => .delete_to_line_start,
-        23 => .delete_whitespace_word_left,
-        25 => .yank,
-        31 => .undo,
-        12 => .redraw,
         127, 8 => .delete_backward,
         '\n' => .insert_newline,
         else => null,

@@ -36,6 +36,8 @@ const skill_runtime = @import("../skills/skill_runtime.zig");
 const text_utils = @import("../shared/text_utils.zig");
 const session_commands = @import("../session/session_commands.zig");
 const usage_recovery = @import("../session/usage_recovery.zig");
+const ui_render = @import("../../ui/render.zig");
+const keybindings = @import("../input/keybindings.zig");
 const usage_report = @import("../session/usage_report.zig");
 const types = @import("../shared/types.zig");
 const assistant_presentation = @import("../agent/assistant_presentation.zig");
@@ -2271,6 +2273,50 @@ pub fn Handlers(comptime App: type) type {
                 .topic = "version",
                 .tone = .neutral,
                 .body = App.app_version,
+            }, true);
+        }
+
+        fn commandHotkeys(ctx: *anyopaque) !void {
+            const app: *App = @ptrCast(@alignCast(ctx));
+            const km = keybindings.getGlobalKeymap();
+            var out = std.Io.Writer.Allocating.init(app.alloc);
+            defer out.deinit();
+
+            try out.writer.writeAll("Active keybindings:\n\n");
+            inline for (std.meta.fields(keybindings.ActionId)) |field| {
+                const action: keybindings.ActionId = @enumFromInt(field.value);
+                const binding = km.bindings[@intFromEnum(action)];
+                var chord_buf: [128]u8 = undefined;
+                var chord_str: []const u8 = "";
+                if (binding.count == 0) {
+                    chord_str = "[disabled]";
+                } else {
+                    var chord_list = std.Io.Writer.Allocating.init(app.alloc);
+                    defer chord_list.deinit();
+                    for (binding.slice(), 0..) |chord, idx| {
+                        if (idx > 0) try chord_list.writer.writeAll(", ");
+                        var buf: [32]u8 = undefined;
+                        const formatted = keybindings.formatChord(chord, &buf) catch "";
+                        try chord_list.writer.writeAll(formatted);
+                    }
+                    const written = chord_list.written();
+                    const copy_len = @min(chord_buf.len, written.len);
+                    @memcpy(chord_buf[0..copy_len], written[0..copy_len]);
+                    chord_str = chord_buf[0..copy_len];
+                }
+                const status_str = if (binding.is_remapped) "custom" else "default";
+                try out.writer.print("  {s:<32} {s:<22} {s:<10} {s}\n", .{
+                    action.name(),
+                    chord_str,
+                    status_str,
+                    action.description(),
+                });
+            }
+
+            try app.writeDomainNotice(.{
+                .topic = "hotkeys",
+                .tone = .neutral,
+                .body = out.written(),
             }, true);
         }
 
