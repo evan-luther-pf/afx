@@ -106,6 +106,17 @@ pub const LoadedWritableSession = store_types.LoadedWritableSession;
 pub const MigrationOptions = store_types.MigrationOptions;
 pub const ProjectionState = store_types.ProjectionState;
 
+pub const ForkResult = struct {
+    new_session_id: []u8,
+    source_session_id: []u8,
+
+    pub fn deinit(self: *ForkResult, alloc: Allocator) void {
+        alloc.free(self.new_session_id);
+        alloc.free(self.source_session_id);
+        self.* = undefined;
+    }
+};
+
 pub const UsageRecoverySession = struct {
     id: []u8,
     protected_updated_at_ms: ?i64,
@@ -426,6 +437,58 @@ test {
     _ = latest_pointer;
     _ = migration;
     _ = discovery;
+}
+
+fn copyForkFileIfExists(alloc: Allocator, src: []const u8, dst: []const u8) !void {
+    const io = io_mod.getIo();
+    var in_file = std.Io.Dir.openFileAbsolute(io, src, .{}) catch |err| switch (err) {
+        error.FileNotFound => return,
+        else => return err,
+    };
+    defer in_file.close(io);
+
+    const bytes = try io_mod.readFileToEnd(alloc, &in_file, 64 * 1024 * 1024);
+    defer alloc.free(bytes);
+
+    var out_file = try std.Io.Dir.createFileAbsolute(io, dst, .{ .truncate = true });
+    defer out_file.close(io);
+    try out_file.writeStreamingAll(io, bytes);
+}
+
+fn readForkFileAlloc(alloc: Allocator, path: []const u8) ![]u8 {
+    var file = try std.Io.Dir.openFileAbsolute(io_mod.getIo(), path, .{});
+    defer file.close(io_mod.getIo());
+    return io_mod.readFileToEnd(alloc, &file, 10 * 1024 * 1024);
+}
+
+fn writeForkFileAbsolute(path: []const u8, content: []const u8) !void {
+    var file = try std.Io.Dir.createFileAbsolute(io_mod.getIo(), path, .{ .truncate = true });
+    defer file.close(io_mod.getIo());
+    try file.writeStreamingAll(io_mod.getIo(), content);
+}
+
+pub fn copyForkSubdirIfExists(alloc: Allocator, src_dir_path: []const u8, dst_dir_path: []const u8, name: []const u8) !void {
+    const io = io_mod.getIo();
+    const src_sub = try std.fs.path.join(alloc, &.{ src_dir_path, name });
+    defer alloc.free(src_sub);
+    const dst_sub = try std.fs.path.join(alloc, &.{ dst_dir_path, name });
+    defer alloc.free(dst_sub);
+
+    var src_dir = std.Io.Dir.openDirAbsolute(io, src_sub, .{ .iterate = true }) catch return;
+    defer src_dir.close(io);
+
+    try std.Io.Dir.cwd().createDirPath(io, dst_sub);
+
+    var iter = src_dir.iterate();
+    while (try iter.next(io)) |entry| {
+        if (entry.kind == .file) {
+            const file_src = try std.fs.path.join(alloc, &.{ src_sub, entry.name });
+            defer alloc.free(file_src);
+            const file_dst = try std.fs.path.join(alloc, &.{ dst_sub, entry.name });
+            defer alloc.free(file_dst);
+            try copyForkFileIfExists(alloc, file_src, file_dst);
+        }
+    }
 }
 
 fn retainWorkspaceSummaries(alloc: Allocator, summaries: *std.ArrayList(SessionSummary), workspace_root: []const u8) void {
@@ -3796,6 +3859,57 @@ pub const Store = struct {
     }
 
     /// Creates a new schema-v3 session from the exact validated manifest
+    pub fn forkSession(
+        self: Store,
+        alloc: Allocator,
+        source_id: []const u8,
+        workspace_root: []const u8,
+    ) !ForkResult {
+        _ = workspace_root;
+        try validateSessionId(source_id);
+        const new_id = try generateSessionId(alloc);
+        errdefer alloc.free(new_id);
+
+        // 1. Load source session state
+        var source = try self.resumeForWrite(alloc, source_id);
+        defer source.deinit(alloc);
+
+        // 2. Clone state for new session
+        var cloned_state = try source.state.dupe(alloc);
+        defer cloned_state.deinit(alloc);
+
+        // 3. Update ID to new_id
+        alloc.free(cloned_state.id);
+        cloned_state.id = try alloc.dupe(u8, new_id);
+
+        const target_dir_path = try sessionDirPath(alloc, self.sessions_dir, new_id);
+        defer alloc.free(target_dir_path);
+        var success = false;
+        errdefer if (!success) {
+            std.Io.Dir.cwd().deleteTree(io_mod.getIo(), target_dir_path) catch {};
+        };
+
+        // 5. Create new session through canonical store
+        var forked_session = try self.startWritableSession(alloc, cloned_state);
+        defer forked_session.deinit(alloc);
+        try forked_session.writeCheckpointIfDue(alloc, true, .{});
+
+        // 6. Copy images, results, logs subdirectories if present (excluding background & subagent)
+        const source_dir_path = try sessionDirPath(alloc, self.sessions_dir, source_id);
+        defer alloc.free(source_dir_path);
+
+        try copyForkSubdirIfExists(alloc, source_dir_path, target_dir_path, "images");
+        try copyForkSubdirIfExists(alloc, source_dir_path, target_dir_path, "results");
+        try copyForkSubdirIfExists(alloc, source_dir_path, target_dir_path, "logs");
+
+        success = true;
+        const source_id_dupe = try alloc.dupe(u8, source_id);
+        return .{
+            .new_session_id = new_id,
+            .source_session_id = source_id_dupe,
+        };
+    }
+
     /// boundary of a source whose commit watermark is corrupt. The source is
     /// locked for the read and is never modified.
     pub fn recoverSessionCopy(
@@ -9329,6 +9443,74 @@ test "recovery copy preserves incomplete compacted authority" {
         @as(usize, 0),
         recovered.state.history[0].compacted_summary.permission_feedback.len,
     );
+}
+
+test "Store.forkSession creates an independent duplicate session without background or subagent state" {
+    const alloc = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var ctx = try initTempStore(alloc, &tmp);
+    defer ctx.deinit(alloc);
+
+    const source_id = "source-session-01";
+    try writeWritableHistoryFixture(
+        alloc,
+        ctx.store,
+        source_id,
+        ctx.workspace,
+        1,
+        "first user prompt",
+    );
+
+    // Create a fake background/ and subagent/ dir in source
+    const source_dir = try sessionDirPath(alloc, ctx.store.sessions_dir, source_id);
+    defer alloc.free(source_dir);
+    const bg_dir = try std.fs.path.join(alloc, &.{ source_dir, "background" });
+    defer alloc.free(bg_dir);
+    try std.Io.Dir.cwd().createDirPath(io_mod.getIo(), bg_dir);
+    const bg_file = try std.fs.path.join(alloc, &.{ bg_dir, "process.json" });
+    defer alloc.free(bg_file);
+    try writeForkFileAbsolute(bg_file, "{\"pid\":1234}");
+
+    const sub_dir = try std.fs.path.join(alloc, &.{ source_dir, "subagent" });
+    defer alloc.free(sub_dir);
+    try std.Io.Dir.cwd().createDirPath(io_mod.getIo(), sub_dir);
+    const sub_file = try std.fs.path.join(alloc, &.{ sub_dir, "control.json" });
+    defer alloc.free(sub_file);
+    try writeForkFileAbsolute(sub_file, "{\"task\":\"sub\"}");
+
+    var fork_res = try ctx.store.forkSession(alloc, source_id, ctx.workspace);
+    defer fork_res.deinit(alloc);
+
+    // 1. Forked session ID is different
+    try std.testing.expect(!std.mem.eql(u8, source_id, fork_res.new_session_id));
+    try std.testing.expectEqualStrings(source_id, fork_res.source_session_id);
+
+    // 2. Forked session loads cleanly with resumeForWrite
+    var forked = try ctx.store.resumeForWrite(alloc, fork_res.new_session_id);
+    defer forked.deinit(alloc);
+    try std.testing.expectEqual(@as(usize, 1), forked.state.history.len);
+    try std.testing.expectEqualStrings("first user prompt", forked.state.history[0].assistant.user.text);
+
+    // 3. Source session is still intact and loadable
+    var source = try ctx.store.resumeForWrite(alloc, source_id);
+    defer source.deinit(alloc);
+    try std.testing.expectEqual(@as(usize, 1), source.state.history.len);
+    try std.testing.expectEqualStrings("first user prompt", source.state.history[0].assistant.user.text);
+
+    // 4. Background and subagent dirs were NOT copied to forked session
+    const forked_dir = try sessionDirPath(alloc, ctx.store.sessions_dir, fork_res.new_session_id);
+    defer alloc.free(forked_dir);
+    const forked_bg = try std.fs.path.join(alloc, &.{ forked_dir, "background" });
+    defer alloc.free(forked_bg);
+    const forked_sub = try std.fs.path.join(alloc, &.{ forked_dir, "subagent" });
+    defer alloc.free(forked_sub);
+
+    const bg_opened = std.Io.Dir.openDirAbsolute(io_mod.getIo(), forked_bg, .{});
+    try std.testing.expectError(error.FileNotFound, bg_opened);
+
+    const sub_opened = std.Io.Dir.openDirAbsolute(io_mod.getIo(), forked_sub, .{});
+    try std.testing.expectError(error.FileNotFound, sub_opened);
 }
 
 test "recovery accepts missing and mismatched commit watermarks" {

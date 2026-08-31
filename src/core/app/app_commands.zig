@@ -360,8 +360,10 @@ pub fn Handlers(comptime App: type) type {
                 .toggle_fast = commandToggleFast,
                 .handle_statusline = commandHandleStatusline,
                 .rename_session = commandRenameSession,
+                .fork_session = commandFork,
                 .handle_notifications = commandHandleNotifications,
                 .handle_workspace = commandHandleWorkspace,
+                .hotkeys = commandHotkeys,
                 .show_version = commandShowVersion,
                 .unknown = commandUnknown,
             };
@@ -554,6 +556,67 @@ pub fn Handlers(comptime App: type) type {
         fn commandRenameSession(ctx: *anyopaque, rest: []const u8) !void {
             const app: *App = @ptrCast(@alignCast(ctx));
             try handleRenameCommand(app, rest);
+        }
+
+        fn commandFork(ctx: *anyopaque) !void {
+            const app: *App = @ptrCast(@alignCast(ctx));
+            if (comptime @hasField(App, "stream")) {
+                if (app.stream.active) {
+                    try app.writeDomainNotice(.{
+                        .topic = "session",
+                        .tone = .@"error",
+                        .body = "Wait for in-flight turn to finish before forking.",
+                    }, true);
+                    return;
+                }
+            }
+
+            if (comptime @hasField(App, "session_persistence")) {
+                const new_id = app_session_runtime.Runtime(App).forkActiveSession(app) catch |err| {
+                    debug_trace.logf("session", "session fork failed err={s}", .{@errorName(err)});
+                    const message = switch (err) {
+                        error.NoActiveSession => "No active session to fork.",
+                        else => "Failed to fork session.",
+                    };
+                    try app.writeDomainNotice(.{
+                        .topic = "session",
+                        .tone = if (err == error.NoActiveSession) .neutral else .@"error",
+                        .body = message,
+                    }, true);
+                    return;
+                };
+                defer app.alloc.free(new_id);
+
+                // Switch live session to the new id via resumeRequestedSession
+                app.requested_resume = .{ .id = try app.alloc.dupe(u8, new_id) };
+                app_session_runtime.Runtime(App).resumeRequestedSession(app) catch |err| {
+                    debug_trace.logf("session", "session switch after fork failed new_id={s} err={s}", .{ new_id, @errorName(err) });
+                    try app.writeDomainNotice(.{
+                        .topic = "session",
+                        .tone = .@"error",
+                        .body = "Forked session created but failed to switch.",
+                    }, true);
+                    return;
+                };
+
+                const notice_body = try std.fmt.allocPrint(
+                    app.alloc,
+                    "Forked to session {s} (no background processes or subagents carried over).",
+                    .{new_id},
+                );
+                defer app.alloc.free(notice_body);
+                try app.writeDomainNotice(.{
+                    .topic = "session",
+                    .tone = .neutral,
+                    .body = notice_body,
+                }, true);
+            } else {
+                try app.writeDomainNotice(.{
+                    .topic = "session",
+                    .tone = .neutral,
+                    .body = "No active session to fork.",
+                }, true);
+            }
         }
 
         fn commandShowHelp(ctx: *anyopaque) !void {
