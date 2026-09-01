@@ -304,6 +304,7 @@ pub const TreeNode = struct {
     mode: domain.Mode,
     state: domain.State,
     generation: u64,
+    created_at_ms: i64 = 0,
     depth: usize,
     relationship_issue: ?TreeRelationshipIssue = null,
 
@@ -4719,6 +4720,7 @@ fn treeNodeFromRecord(
         .mode = record.mode,
         .state = record.state,
         .generation = record.generation,
+        .created_at_ms = record.created_at_ms,
         .depth = depth,
     };
 }

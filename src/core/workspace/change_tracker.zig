@@ -92,6 +92,22 @@ pub const ChangeTracker = struct {
         return self.undoLastWithTestControl(alloc, .{});
     }
 
+    pub fn undoPath(
+        self: *ChangeTracker,
+        alloc: Allocator,
+        path: []const u8,
+    ) UndoResult {
+        var index = self.stack.items.len;
+        while (index > 0) {
+            index -= 1;
+            if (!std.mem.eql(u8, self.stack.items[index].path, path)) continue;
+            const operation = self.stack.orderedRemove(index);
+            self.stack.appendAssumeCapacity(operation);
+            return self.undoLast(alloc);
+        }
+        return .empty;
+    }
+
     fn undoLastWithTestControl(
         self: *ChangeTracker,
         alloc: Allocator,

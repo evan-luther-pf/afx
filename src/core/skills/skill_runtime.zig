@@ -1285,11 +1285,15 @@ pub const Runtime = struct {
     dir: []u8 = &.{},
     items: []Skill = &.{},
     diagnostics: []SkillDiagnostic = &.{},
+    disabled_names: std.StringHashMapUnmanaged(void) = .empty,
     menu: SkillMenu = .{},
 
     pub fn deinit(self: *Runtime, alloc: Allocator) void {
         self.freeLoaded(alloc);
         self.menu.close();
+        var disabled = self.disabled_names.iterator();
+        while (disabled.next()) |entry| alloc.free(entry.key_ptr.*);
+        self.disabled_names.deinit(alloc);
     }
 
     fn freeLoaded(self: *Runtime, alloc: Allocator) void {
@@ -1307,6 +1311,33 @@ pub const Runtime = struct {
         self.items = skills;
         self.diagnostics = diagnostics;
         self.menu.clamp(self.items);
+    }
+
+    pub fn isEnabled(self: *const Runtime, name: []const u8) bool {
+        return !self.disabled_names.contains(name);
+    }
+
+    pub fn setEnabled(self: *Runtime, alloc: Allocator, name: []const u8, enabled: bool) !bool {
+        if (enabled) {
+            const removed = self.disabled_names.fetchRemove(name) orelse return false;
+            alloc.free(removed.key);
+            return true;
+        }
+        if (self.disabled_names.contains(name)) return false;
+        const owned = try alloc.dupe(u8, name);
+        errdefer alloc.free(owned);
+        try self.disabled_names.put(alloc, owned, {});
+        return true;
+    }
+
+    pub fn enabledItems(self: *const Runtime, alloc: Allocator) ![]Skill {
+        var items: std.ArrayList(Skill) = .empty;
+        defer items.deinit(alloc);
+        for (self.items) |skill| {
+            if (!self.isEnabled(skill.name)) continue;
+            try items.append(alloc, skill);
+        }
+        return items.toOwnedSlice(alloc);
     }
 
     pub fn openMenu(self: *Runtime) void {
@@ -1356,7 +1387,9 @@ pub const Runtime = struct {
     }
 
     pub fn buildBoundedSystemPromptSection(self: Runtime, alloc: Allocator, limits: context_limits.Values) !BoundedPromptSection {
-        var section = try buildSkillsSystemPromptSectionWithLimits(alloc, self.items, limits);
+        const enabled = try self.enabledItems(alloc);
+        defer alloc.free(enabled);
+        var section = try buildSkillsSystemPromptSectionWithLimits(alloc, enabled, limits);
         errdefer section.deinit(alloc);
         if (self.diagnostics.len == 0) return section;
 
@@ -3819,4 +3852,21 @@ test "loadVisibleSkills still rejects external symlinks without an authority" {
     try std.testing.expectEqualStrings(logical_path, discovery.diagnostics[0].path);
     try std.testing.expectEqual(SkillDiagnosticScope.candidate, discovery.diagnostics[0].scope);
     try std.testing.expectEqual(SkillDiagnosticCause.unreadable, discovery.diagnostics[0].cause);
+}
+
+test "runtime skill enablement filters prompt inventory" {
+    const alloc = std.testing.allocator;
+    const skills = [_]Skill{staticSkill("review", "review help", .workspace_shared)};
+    var runtime = Runtime{ .items = @constCast(&skills) };
+    defer runtime.disabled_names.deinit(alloc);
+
+    try std.testing.expect(try runtime.setEnabled(alloc, "review", false));
+    const disabled = try runtime.enabledItems(alloc);
+    defer alloc.free(disabled);
+    try std.testing.expectEqual(@as(usize, 0), disabled.len);
+
+    try std.testing.expect(try runtime.setEnabled(alloc, "review", true));
+    const enabled = try runtime.enabledItems(alloc);
+    defer alloc.free(enabled);
+    try std.testing.expectEqual(@as(usize, 1), enabled.len);
 }

@@ -615,6 +615,7 @@ pub fn repair_legacy_image_snapshots(
         alloc,
         candidate,
         snapshot_dir,
+        !snapshot_dir_existed,
     ) catch |err| {
         cleanup_candidate_snapshot_files(candidate, history);
         if (!snapshot_dir_existed) remove_empty_snapshot_directory(snapshot_dir);
@@ -686,6 +687,7 @@ fn repair_legacy_image_snapshots_in_place(
     alloc: Allocator,
     history: []HistoryTurn,
     snapshot_dir: []const u8,
+    repair_missing_owned_directory: bool,
 ) Allocator.Error!bool {
     var changed = false;
     for (history) |*turn| {
@@ -695,7 +697,16 @@ fn repair_legacy_image_snapshots_in_place(
         var drop_indexes: std.ArrayList(usize) = .empty;
         defer drop_indexes.deinit(alloc);
         for (images_ptr.*, 0..) |*image, image_index| {
-            if (image.snapshot_path != null and image.snapshot_sha256 != null) continue;
+            if (image.snapshot_path != null and
+                image.snapshot_sha256 != null and
+                !repair_missing_owned_directory)
+            {
+                continue;
+            }
+            if (image.snapshot_path) |path| alloc.free(path);
+            if (image.snapshot_sha256) |digest| alloc.free(digest);
+            image.snapshot_path = null;
+            image.snapshot_sha256 = null;
             image_attachments.captureImageSnapshot(alloc, image, snapshot_dir) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
                 else => {
@@ -817,6 +828,23 @@ test "legacy image snapshot repair captures available path once" {
     const unexpected = std.base64.standard.Encoder.encode(&unexpected_buf, image_b);
     try std.testing.expect(std.mem.find(u8, out.written(), expected) != null);
     try std.testing.expect(std.mem.find(u8, out.written(), unexpected) == null);
+    const missing_snapshot = try alloc.dupe(
+        u8,
+        history[0].assistant.user.images[0].snapshot_path.?,
+    );
+    defer alloc.free(missing_snapshot);
+    try std.Io.Dir.deleteFileAbsolute(std.testing.io, missing_snapshot);
+    try std.Io.Dir.deleteDirAbsolute(std.testing.io, snapshot_dir);
+    try std.testing.expect(try repair_legacy_image_snapshots(alloc, &history, snapshot_dir));
+
+    var repaired: std.Io.Writer.Allocating = .init(alloc);
+    defer repaired.deinit();
+    try image_attachments.writeImageFilePartJson(
+        alloc,
+        &repaired.writer,
+        history[0].assistant.user.images[0],
+    );
+    try std.testing.expect(std.mem.find(u8, repaired.written(), unexpected) != null);
 }
 
 test "legacy image snapshot repair drops unavailable path-only images" {

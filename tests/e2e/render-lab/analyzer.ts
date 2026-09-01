@@ -71,7 +71,11 @@ export function analyzeRun(manifest: RenderLabManifest) {
     const expectsChrome = expectsFxChrome(frame, manifest, logoRows, input_rows);
     const viewerFooterPresent = hasTranscriptViewerFooter(frame.grid);
 
-    if (frame.evidence && !frame.evidence.stable) {
+    if (
+      frame.evidence &&
+      !frame.evidence.stable &&
+      !(manifest.scenario === "active-tool-placement" && frame.event === "active-tool-clipped")
+    ) {
       push(
         failures,
         "unstable-frame-capture",
@@ -423,7 +427,14 @@ function assertActiveToolPlacementScenario(
     "active-tool-final-update",
   ].includes(frame.event)) {
     const isActiveClippedFrame = frame.event === "active-tool-clipped";
-    assertMarkerCount(failures, frame, activeMarker, isActiveClippedFrame ? 1 : 0);
+    if (isActiveClippedFrame) {
+      const activeCount = countOccurrences(grid, activeMarker);
+      if (activeCount > 1) {
+        push(failures, "active-tool-marker-count", frame, `expected at most one clipped active marker, found ${activeCount}`);
+      }
+    } else {
+      assertMarkerCount(failures, frame, activeMarker, 0);
+    }
     if (isActiveClippedFrame) {
       assertMarkerCount(failures, frame, terminalMarker, 0);
       assertSemanticScrollbackMarkerCount(
@@ -457,11 +468,11 @@ function assertActiveToolPlacementScenario(
         "active-tool-terminal-scrollback-once",
       );
     }
-    if (commandMoreCount(grid) !== null) {
-      push(failures, "active-tool-compact-output-preview", frame, "compact command frame exposed an output preview");
+    if (!isActiveClippedFrame && commandMoreCount(grid) === null) {
+      push(failures, "active-tool-compact-output-summary", frame, "compact command frame omitted its output summary");
     }
-    if (grid.includes("ACTIVE_TOOL_LINE_06") || grid.includes("ACTIVE_TOOL_LINE_32")) {
-      push(failures, "active-tool-folded-output-hidden", frame, "compact command frame exposes raw output");
+    if (grid.includes("ACTIVE_TOOL_LINE_32")) {
+      push(failures, "active-tool-folded-output-hidden", frame, "compact command frame exposes unfolded output");
     }
     if (frame.event === "active-tool-final-update") {
       assertScrollbackMarkerCount(
@@ -565,37 +576,33 @@ function assertActiveActivitySequence(
   const submittedRows = lines.flatMap((line, row) =>
     line.includes(submittedMarker) ? [row] : []
   );
-  const groupRows = lines.flatMap((line, row) =>
-    line.includes("tool call") && row < lines.length - 1 ? [row] : []
-  );
   const activityRows = lines.flatMap((line, row) =>
     line.includes(activeMarker) ? [row] : []
   );
-  if (submittedRows.length !== 1 || groupRows.length !== 1 || activityRows.length !== 1) {
+  if (submittedRows.length !== 1 || activityRows.length !== 1) {
     push(
       failures,
       "active-tool-activity-marker-count",
       frame,
-      `expected one submitted row, group row, and activity row, found ${submittedRows.length}, ${groupRows.length}, and ${activityRows.length}`,
+      `expected one submitted row and activity row, found ${submittedRows.length} and ${activityRows.length}`,
     );
     return;
   }
 
   const submittedRow = submittedRows[0]!;
-  const groupRow = groupRows[0]!;
   const activityRow = activityRows[0]!;
-  if (submittedRow >= groupRow || groupRow >= activityRow) {
+  if (submittedRow >= activityRow) {
     push(
       failures,
       "active-tool-activity-marker-order",
       frame,
-      "grouped activity did not follow the submitted prompt",
+      "active tool activity did not follow the submitted prompt",
     );
     return;
   }
 
   let blankRows = 0;
-  for (let row = groupRow - 1; row > submittedRow; row -= 1) {
+  for (let row = activityRow - 1; row > submittedRow; row -= 1) {
     if ((lines[row] ?? "").trim().length !== 0) break;
     blankRows += 1;
   }

@@ -263,7 +263,7 @@ describe("tui: render record/replay", () => {
       const extractDir = mkdtempSync(join(tmpdir(), "afx-render-read-only-tools-"));
       workDirs.push(extractDir);
       execFileSync("tar", ["-xzf", READ_ONLY_TOOLS_CAPTURE_TARBALL, "-C", extractDir]);
-      const captureDir = join(extractDir, "afx-render-bug-20260510-075848");
+      const captureDir = join(extractDir, "fx-render-bug-20260510-075848");
       const tapePath = join(captureDir, "bug.fxtape");
       const workDir = mkdtempSync(join(tmpdir(), "afx-render-read-only-tools-replay-"));
       workDirs.push(workDir);

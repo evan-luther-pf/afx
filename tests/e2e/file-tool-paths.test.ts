@@ -558,7 +558,7 @@ describe("filesystem path handling", () => {
 
         for (const request of gateway.requests) {
           expect(request.body).toContain('"name":"subagent"');
-          expect(request.body).not.toContain('"name":"task"');
+          expect(request.body).toContain('"name":"task"');
           expect(request.body).not.toContain(instructionSentinel);
           expect(request.body).not.toContain("target outside workspace");
           expect(request.body).not.toContain("context_deferred");
@@ -732,7 +732,7 @@ describe("filesystem path handling", () => {
             input: { path: scenario.path },
             expectedResultRequest: [scenario.canonical],
             expectedResultOutput: [
-              `<path>${scenario.canonical}</path>`,
+              `[${scenario.canonical}#`,
               scenario.content,
             ],
           });
@@ -1373,7 +1373,7 @@ describe("filesystem path handling", () => {
           (body) => {
             expect(body).not.toContain("target outside workspace");
             const readOutput = toolResultOutput(body, "edit_read_1");
-            expect(readOutput).toContain(`<path>${editTarget}</path>`);
+            expect(readOutput).toContain(`[${editTarget}#`);
             expect(readOutput).toContain("BEFORE_EDIT");
             expect(readOutput).not.toContain("Not executed");
             expect(readFileSync(editTarget, "utf8")).toBe("BEFORE_EDIT\n");

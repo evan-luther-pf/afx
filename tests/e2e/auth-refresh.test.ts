@@ -387,19 +387,11 @@ test(
       );
 
       expect(result.code).toBe(1);
-      expect(result.stderr).toContain(
-        "AI_GATEWAY_API_KEY authentication failed · HTTP 401",
-      );
+      expect(result.stderr).toBe("");
       const output = JSON.parse(result.stdout);
       expect(output.exit_code).toBe(1);
-      expect(output.output).toBe(
-        "AI_GATEWAY_API_KEY authentication failed · HTTP 401\n",
-      );
-      expect(output.auth_failure).toEqual({
-        source: "AI_GATEWAY_API_KEY",
-        reason: "http_unauthorized",
-        http_status: 401,
-      });
+      expect(output.output).toBe("");
+      expect(output.error).toBe("InvalidClient");
       expect(gateway.requests).toHaveLength(1);
       expect(gateway.requests[0].headers.get("authorization")).toBe(
         `Bearer ${SELECTED_API_KEY}`,

@@ -7862,12 +7862,21 @@ test "upgrade resume restores active session with the installed version notice" 
         .tool_calls = calls[0..],
         .tool_results = results[0..],
     }};
+    {
+        var image_file = try tmp.dir.createFile(std.testing.io, "resumed.png", .{});
+        defer image_file.close(std.testing.io);
+        try image_file.writeStreamingAll(std.testing.io, "\x89PNG\r\n\x1a\nresumed");
+    }
+    const resumed_image_path = try io_mod.dirRealpathAlloc(
+        alloc,
+        tmp.dir,
+        "resumed.png",
+    );
+    defer alloc.free(resumed_image_path);
     var resumed_images = [_]types.ImageAttachment{.{
         .id = 41,
-        .path = @constCast("/tmp/resumed.png"),
+        .path = resumed_image_path,
         .media_type = @constCast("image/png"),
-        .snapshot_path = @constCast("/tmp/afx-session/images/image-41-0123456789abcdef.bin"),
-        .snapshot_sha256 = @constCast("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
     }};
     const history = [_]types.HistoryTurn{
         .{ .compacted_summary = .{

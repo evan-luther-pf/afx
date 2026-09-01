@@ -436,7 +436,7 @@ pub fn loadConfigFromPath(alloc: Allocator, path: []const u8) !std.ArrayList(Mcp
     };
 }
 
-fn addOrReplaceLocalServer(alloc: Allocator, path: []const u8, name: []const u8, command: []const []const u8) !void {
+pub fn addOrReplaceLocalServer(alloc: Allocator, path: []const u8, name: []const u8, command: []const []const u8) !void {
     if (command.len == 0) return error.McpMissingCommand;
     if (!isValidServerName(name)) return error.McpInvalidServerName;
 
@@ -461,7 +461,7 @@ fn addOrReplaceLocalServer(alloc: Allocator, path: []const u8, name: []const u8,
     try saveConfigsToPath(alloc, path, configs.items);
 }
 
-fn removeServerFromPath(alloc: Allocator, path: []const u8, name: []const u8) !bool {
+pub fn removeServerFromPath(alloc: Allocator, path: []const u8, name: []const u8) !bool {
     var configs = try loadConfigFromPath(alloc, path);
     defer freeConfigs(alloc, &configs);
 
@@ -473,6 +473,23 @@ fn removeServerFromPath(alloc: Allocator, path: []const u8, name: []const u8) !b
         return true;
     }
 
+    return false;
+}
+
+pub fn setServerEnabledAtPath(
+    alloc: Allocator,
+    path: []const u8,
+    name: []const u8,
+    enabled: bool,
+) !bool {
+    var configs = try loadConfigFromPath(alloc, path);
+    defer freeConfigs(alloc, &configs);
+    for (configs.items) |*config| {
+        if (!std.mem.eql(u8, config.name, name)) continue;
+        config.enabled = enabled;
+        try saveConfigsToPath(alloc, path, configs.items);
+        return true;
+    }
     return false;
 }
 
