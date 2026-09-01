@@ -208,6 +208,99 @@ pub const SlashSpec = struct {
     has_args: bool = false,
     accepts_payload: bool = false,
     requires_prompt_credential: bool = false,
+    pub fn guiAvailable(self: SlashSpec) bool {
+        return switch (self.kind) {
+            .image,
+            .images,
+            .allowlist,
+            .trace,
+            .settings,
+            .alias,
+            .paste,
+            .statusline,
+            .notifications,
+            .export_session,
+            => false,
+            else => true,
+        };
+    }
+
+    pub fn guiExecution(self: SlashSpec) SlashExecution {
+        return switch (self.kind) {
+            .help,
+            .clear_screen,
+            .new_session,
+            .reset_session,
+            .resume_session,
+            .fork,
+            .login,
+            .logout,
+            .providers,
+            .image,
+            .images,
+            .model,
+            .models,
+            .permissions,
+            .allowlist,
+            .agents,
+            .mcp,
+            .skills,
+            .settings,
+            .workspace,
+            => .control,
+            else => .structured,
+        };
+    }
+
+    pub fn guiPresentation(self: SlashSpec) SlashGuiPresentation {
+        return switch (self.kind) {
+            .model, .models => .model_tab,
+            .new_session, .resume_session, .fork => .session_tabs,
+            .login, .logout, .providers => .provider_panel,
+            .permissions, .allowlist => .permissions_panel,
+            .help => .help_panel,
+            .status, .stats, .usage, .credits, .version => .runtime_panel,
+            .continue_recovery, .tree, .handoff => .transcript,
+            .background,
+            .image,
+            .images,
+            .mcp,
+            .skills,
+            .settings,
+            .alias,
+            .statusline,
+            .notifications,
+            .workspace,
+            .export_session,
+            => .form,
+            else => .immediate,
+        };
+    }
+
+    pub fn guiResult(self: SlashSpec) SlashResultPresentation {
+        return switch (self.guiPresentation()) {
+            .help_panel,
+            .runtime_panel,
+            .provider_panel,
+            .permissions_panel,
+            .form,
+            => .panel,
+            .transcript => .transcript,
+            .model_tab, .session_tabs => .none,
+            .immediate => .toast,
+        };
+    }
+
+    pub fn guiDanger(self: SlashSpec) SlashDanger {
+        return switch (self.kind) {
+            .logout, .undo, .quit => .confirm,
+            else => .none,
+        };
+    }
+
+    pub fn guiAction(self: SlashSpec) []const u8 {
+        return if (self.command.len > 1) self.command[1..] else self.command;
+    }
 };
 
 pub const SlashRegistry = mod_registry.CommandRegistry(SlashSpec);
