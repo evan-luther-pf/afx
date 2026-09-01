@@ -1817,27 +1817,34 @@ tmuxTest(
     await active.waitForComposer(READY_TIMEOUT);
 
     // Type a draft
-    await active.sendLiteral("unsubmitted draft");
+    await typeLiteral(active, "unsubmitted draft");
     await active.waitForPane((pane) => pane.includes("unsubmitted draft"), READY_TIMEOUT);
 
     // Press Ctrl+R (C-r) to open history search
     await active.sendKeys("C-r");
-    await active.waitForPane((pane) => pane.includes("first prompt") && pane.includes("second prompt"), READY_TIMEOUT);
+    await active.waitForPane((pane) => pane.includes("────────────────────────────────────────────────────────────────────────────────"), READY_TIMEOUT);
 
     // Filter for "first" and wait for query in composer
-    await active.sendLiteral("first");
+    await typeLiteral(active, "first");
     await active.waitForPane((pane) => pane.includes("┃ first"), READY_TIMEOUT);
 
     // Press Enter to select
     await active.sendKeys("Enter");
-    await active.waitForPane((pane) => pane.includes("┃ echo first prompt"), READY_TIMEOUT);
+    await active.waitForPane(
+      (pane) => pane.includes("┃ echo first prompt") && !pane.includes("────────────────────────────────────────────────────────────────────────────────"),
+      READY_TIMEOUT,
+    );
 
-    // Open history search again, type non-matching query, and cancel with Escape
+    // Open history search again, type query, and cancel with Escape to restore draft
     await active.sendKeys("C-r");
-    await active.sendLiteral("something_else");
+    await active.waitForPane((pane) => pane.includes("────────────────────────────────────────────────────────────────────────────────"), READY_TIMEOUT);
+    await typeLiteral(active, "something_else");
     await active.waitForPane((pane) => pane.includes("┃ something_else"), READY_TIMEOUT);
     await active.sendKeys("Escape");
-    await active.waitForPane((pane) => pane.includes("┃ echo first prompt"), READY_TIMEOUT);
+    await active.waitForPane(
+      (pane) => pane.includes("┃ echo first prompt") && !pane.includes("────────────────────────────────────────────────────────────────────────────────"),
+      READY_TIMEOUT,
+    );
   },
   TIMEOUT,
 );
