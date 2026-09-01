@@ -1811,7 +1811,7 @@ tmuxTest(
     await setupPromptHistory(active);
 
     // Type a draft
-    await typeLiteral(active, "unsubmitted draft");
+    await active.sendHexBytes(hexSeq("unsubmitted draft"));
     await active.waitForPane((pane) => pane.includes("unsubmitted draft"), READY_TIMEOUT);
 
     // Press Ctrl+R (0x12) to open history search
@@ -1819,7 +1819,7 @@ tmuxTest(
     await active.waitForPane((pane) => pane.includes("zz-history"), READY_TIMEOUT);
 
     // Filter for "zz" and wait for query in composer
-    await typeLiteral(active, "zz");
+    await active.sendHexBytes(hexSeq("zz"));
     await active.waitForPane((pane) => pane.includes("┃ zz"), READY_TIMEOUT);
 
     // Press Enter to select
@@ -1829,7 +1829,7 @@ tmuxTest(
     // Open history search again, type query, and cancel with Escape to restore draft
     await active.sendHexBytes(["12"]);
     await active.waitForPane((pane) => pane.includes("zz-history"), READY_TIMEOUT);
-    await typeLiteral(active, "something_else");
+    await active.sendHexBytes(hexSeq("something_else"));
     await active.waitForPane((pane) => pane.includes("┃ something_else"), READY_TIMEOUT);
     await active.sendKeys("Escape");
     await active.waitForPane((pane) => pane.includes("┃ zz-history"), READY_TIMEOUT);
