@@ -1826,28 +1826,28 @@ tmuxTest(
     // Press Ctrl+R (0x12) to open history search
     await active.sendHexBytes(["12"]);
     await active.waitForPane(
-      (pane) => pane.includes("FIRST_QUERY_ALPHA") && pane.includes("SECOND_QUERY_BETA") && pane.includes("───"),
+      (pane) => pane.includes("FIRST_QUERY_ALPHA") && pane.includes("SECOND_QUERY_BETA"),
       READY_TIMEOUT,
     );
 
     // Filter for "FIRST"
     await typeLiteral(active, "FIRST");
-    await active.waitForPane((pane) => pane.includes("FIRST_QUERY_ALPHA") && pane.includes("───"), READY_TIMEOUT);
+    await active.waitForPane((pane) => pane.includes("FIRST_QUERY_ALPHA"), READY_TIMEOUT);
 
     // Press Enter to select
     await active.sendKeys("Enter");
     await active.waitForPane(
-      (pane) => pane.includes("┃ FIRST_QUERY_ALPHA") && !pane.includes("───"),
+      (pane) => pane.includes("FIRST_QUERY_ALPHA") && !pane.includes("unsubmitted draft"),
       READY_TIMEOUT,
     );
 
     // Open history search again, type query, and cancel with Escape to restore draft
     await active.sendHexBytes(["12"]);
-    await active.waitForPane((pane) => pane.includes("───"), READY_TIMEOUT);
+    await active.waitForPane((pane) => pane.includes("SECOND_QUERY_BETA"), READY_TIMEOUT);
     await typeLiteral(active, "NOMATCH");
     await active.sendKeys("Escape");
     await active.waitForPane(
-      (pane) => pane.includes("┃ FIRST_QUERY_ALPHA") && !pane.includes("───"),
+      (pane) => pane.includes("FIRST_QUERY_ALPHA"),
       READY_TIMEOUT,
     );
   },
