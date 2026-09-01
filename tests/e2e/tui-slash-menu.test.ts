@@ -1531,7 +1531,7 @@ describe.skipIf(SKIP)("tui: slash menu", () => {
           FX_AUTO_UPGRADE: "0",
         },
         width: 100,
-        height: 30,
+        height: 36,
       });
       await session.waitForComposer(10_000);
 
