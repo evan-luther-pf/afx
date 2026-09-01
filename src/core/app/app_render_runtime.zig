@@ -388,6 +388,9 @@ pub fn Runtime(comptime App: type) type {
         var file_completions_buf: [input_completion_runtime.file_picker_completion_cap]file_index.SearchResult = undefined;
         var file_match_spans_buf: [input_completion_runtime.file_picker_completion_cap * file_index.max_path_len]file_index.MatchSpan = undefined;
         var file_path_storage_buf: [input_completion_runtime.file_picker_path_storage_cap]u8 = undefined;
+        // Container-scoped: footerContext returns RenderContext by value; a
+        // function-local buffer would leave history_completions dangling.
+        var history_items_buf: [128][]const u8 = undefined;
         noinline fn footerContext(
             app: *App,
             upgrade_status_buf: *[64]u8,
@@ -450,7 +453,6 @@ pub fn Runtime(comptime App: type) type {
                 file_items = file_completions_buf[0..count];
                 file_selection_index = app.input_runtime.picker.file_completion_index;
             }
-            var history_items_buf: [128][]const u8 = undefined;
             const history_count = if (app.input_runtime.picker.history_search_active)
                 picker_state.filterHistoryEntries(
                     app.input_runtime.composer_history.entries.items,
