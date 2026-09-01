@@ -300,6 +300,9 @@ pub fn Runtime(comptime App: type) type {
             );
             app.shell.visual_tool_blocks = startup.visual_tool_blocks;
             app.shell.fullscreen_display = startup.fullscreen_display;
+            if (comptime @hasField(@TypeOf(app.shell), "images_enabled")) {
+                app.shell.images_enabled = startup.images_enabled;
+            }
             app.permission_state.yolo_acknowledged = startup.yolo_acknowledged;
             app_permission_runtime.Runtime(App).initializeYoloWarning(app);
             app.statusline_context = startup.statusline_context;

@@ -102,6 +102,10 @@ Common reads remain compact. Commands, edits, searches, tasks, and debugger work
 
 afx keeps ordinary work in terminal scrollback. Full-screen views are reserved for interactions that genuinely need them, such as permission review, menus, and agent management.
 
+## Inline images
+
+In terminals that support graphics (iTerm2, WezTerm, Ghostty, and kitty), image attachments render inline while their row is on screen; scrollback keeps the textual `[Image #N]` badge. Inside tmux or unsupported terminals, badges are always used. Toggle with the `Images` setting in `/settings`. The full-transcript review screen uses badges.
+
 ## Custom themes
 
 afx auto-detects dark and light terminal backgrounds and supports user-defined color themes. Themes live at `~/.afx/themes/<name>.json`:

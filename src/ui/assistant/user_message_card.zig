@@ -4,6 +4,7 @@ const build_checkpoint = @import("../render_engine/build_checkpoint.zig");
 const display_width = @import("../../core/shared/display_width.zig");
 const types = @import("../../core/shared/types.zig");
 const image_attachments = @import("../../core/images/image_attachments.zig");
+const image_protocol = @import("../terminal/image_protocol.zig");
 const visual_layout = @import("../input/visual_layout.zig");
 const vt_emulator = @import("../../core/terminal/engine.zig");
 
@@ -24,6 +25,17 @@ const accent_light = "\x1b[38;5;238m";
 var accent_style: []const u8 = accent_dark;
 
 var marker_style: []const u8 = dark_marker_style;
+var active_graphics_protocol: image_protocol.GraphicsProtocol = .none;
+var active_images_enabled: bool = true;
+
+pub fn setGraphicsProtocol(protocol: image_protocol.GraphicsProtocol, enabled: bool) void {
+    active_graphics_protocol = protocol;
+    active_images_enabled = enabled;
+}
+
+pub fn getGraphicsProtocol() image_protocol.GraphicsProtocol {
+    return active_graphics_protocol;
+}
 
 pub fn setStyle(light: bool, _: ?Rgb) void {
     marker_style = if (light) light_marker_style else dark_marker_style;
@@ -70,7 +82,12 @@ fn wrapCut(text: []const u8, row_budget: usize) WrapCut {
     if (prefix.len == 0) {
         var end: usize = 0;
         while (end < text.len and text[end] == 0x1b) {
-            end = display_width.ansiSequenceEnd(text, end);
+            const next_end = display_width.ansiSequenceEnd(text, end);
+            if (next_end <= end) {
+                end += 1;
+                break;
+            }
+            end = next_end;
         }
         const unit = display_width.displayUnitAt(text, end);
         if (unit.byte_len == 0) return .{ .keep_bytes = 0, .skip_bytes = text.len };
@@ -198,20 +215,26 @@ fn buildUserPromptCardWithSkillTokensAndLinksInterruptible(
     defer expanded_buf.deinit();
     if (images.len > 0) {
         _ = if (linked_images)
-            try image_attachments.expandPlaceholdersWithLinkedBadges(
+            try expandPlaceholdersWithLinkedBadgesAndGraphics(
                 alloc,
                 &expanded_buf.writer,
                 token_text,
                 images,
                 null,
+                cols,
+                active_graphics_protocol,
+                active_images_enabled,
             )
         else
-            try image_attachments.expandPlaceholdersWithBadges(
+            try expandPlaceholdersWithBadgesAndGraphics(
                 alloc,
                 &expanded_buf.writer,
                 token_text,
                 images,
                 null,
+                cols,
+                active_graphics_protocol,
+                active_images_enabled,
             );
     } else {
         try expanded_buf.writer.writeAll(token_text);
@@ -241,6 +264,119 @@ fn buildUserPromptCardWithSkillTokensAndLinksInterruptible(
     }
 
     return out.toOwnedSlice();
+}
+fn expandPlaceholdersWithBadgesAndGraphics(
+    alloc: std.mem.Allocator,
+    writer: *std.Io.Writer,
+    text: []const u8,
+    images: []const types.ImageAttachment,
+    cursor_in: ?usize,
+    cols: u16,
+    protocol: image_protocol.GraphicsProtocol,
+    enabled: bool,
+) !image_attachments.ExpandWithBadgesResult {
+    return expandPlaceholdersWithBadgeAndGraphicMode(
+        alloc,
+        writer,
+        text,
+        images,
+        cursor_in,
+        false,
+        cols,
+        protocol,
+        enabled,
+    );
+}
+
+fn expandPlaceholdersWithLinkedBadgesAndGraphics(
+    alloc: std.mem.Allocator,
+    writer: *std.Io.Writer,
+    text: []const u8,
+    images: []const types.ImageAttachment,
+    cursor_in: ?usize,
+    cols: u16,
+    protocol: image_protocol.GraphicsProtocol,
+    enabled: bool,
+) !image_attachments.ExpandWithBadgesResult {
+    return expandPlaceholdersWithBadgeAndGraphicMode(
+        alloc,
+        writer,
+        text,
+        images,
+        cursor_in,
+        true,
+        cols,
+        protocol,
+        enabled,
+    );
+}
+
+fn expandPlaceholdersWithBadgeAndGraphicMode(
+    alloc: std.mem.Allocator,
+    writer: *std.Io.Writer,
+    text: []const u8,
+    images: []const types.ImageAttachment,
+    cursor_in: ?usize,
+    linked: bool,
+    cols: u16,
+    protocol: image_protocol.GraphicsProtocol,
+    enabled: bool,
+) !image_attachments.ExpandWithBadgesResult {
+    var cursor_out: ?usize = null;
+    var written: usize = 0;
+    var expanded_any = false;
+    var i: usize = 0;
+    while (i < text.len) {
+        if (cursor_in) |c| {
+            if (cursor_out == null and i >= c) cursor_out = written;
+        }
+        if (text[i] == '[') {
+            if (image_attachments.matchImagePlaceholder(text, i)) |match| {
+                if (image_attachments.findById(images, match.id)) |img| {
+                    expanded_any = true;
+                    var badge_buf: std.Io.Writer.Allocating = .init(alloc);
+                    defer badge_buf.deinit();
+                    if (linked) {
+                        try image_attachments.writeImageBadge(&badge_buf.writer, img.id, img.path);
+                    } else {
+                        try badge_buf.writer.print("[Image {d}]", .{img.id});
+                    }
+
+                    if (protocol != .none and enabled) {
+                        if (image_protocol.loadImageBytes(alloc, img)) |maybe_bytes| {
+                            if (maybe_bytes) |bytes| {
+                                defer alloc.free(bytes);
+                                const bounded_cols = @min(cols -| 4, image_protocol.max_image_cols);
+                                const bounded_rows = image_protocol.max_image_rows;
+                                if (image_protocol.encodeImageGraphic(alloc, protocol, bytes, bounded_cols, bounded_rows, @intCast(img.id))) |maybe_graphic| {
+                                    if (maybe_graphic) |graphic| {
+                                        defer alloc.free(graphic);
+                                        try badge_buf.writer.writeAll(graphic);
+                                    }
+                                } else |_| {}
+                            }
+                        } else |_| {}
+                    }
+
+                    const badge_bytes = badge_buf.written();
+                    try writer.writeAll(badge_bytes);
+                    written += badge_bytes.len;
+                } else {
+                    try writer.writeAll(text[i .. i + match.length]);
+                    written += match.length;
+                }
+                i += match.length;
+                continue;
+            }
+        }
+        try writer.writeByte(text[i]);
+        written += 1;
+        i += 1;
+    }
+    if (cursor_in) |c| {
+        if (cursor_out == null and c >= text.len) cursor_out = written;
+    }
+    return .{ .cursor_out = cursor_out, .expanded_any = expanded_any };
 }
 
 fn renderSkillTokensForCard(
@@ -782,4 +918,55 @@ test "buildUserPromptCard handles leading newline with image" {
     try assertRowStructure(card);
     try std.testing.expect(std.mem.find(u8, card, "[Image 1]") != null);
     try std.testing.expect(std.mem.find(u8, card, "after") != null);
+}
+
+test "buildUserPromptCard emits graphic escape payloads when graphics protocol is enabled" {
+    const alloc = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const io_mod = @import("../../core/shared/io.zig");
+    var img_file = try tmp.dir.createFile(io_mod.getIo(), "test.png", .{});
+    try img_file.writeStreamingAll(io_mod.getIo(), "TEST_PNG_BYTES_FOR_CARD");
+    img_file.close(io_mod.getIo());
+
+    const abs_path = try io_mod.dirRealpathAlloc(alloc, tmp.dir, "test.png");
+    defer alloc.free(abs_path);
+
+    const images = [_]types.ImageAttachment{.{
+        .id = 1,
+        .path = abs_path,
+        .media_type = @constCast("image/png"),
+    }};
+
+    // 1. iTerm2 mode emits OSC 1337 and keeps [Image 1] badge
+    setGraphicsProtocol(.iterm2, true);
+    defer setGraphicsProtocol(.none, true);
+
+    const iterm_card = try buildUserPromptCard(alloc, "check [Image #1]", &images, 80);
+    defer alloc.free(iterm_card);
+    try std.testing.expect(std.mem.find(u8, iterm_card, "[Image 1]") != null);
+    try std.testing.expect(std.mem.find(u8, iterm_card, "\x1b]1337;File=inline=1") != null);
+
+    // 2. Kitty mode emits Kitty APC and keeps [Image 1] badge
+    setGraphicsProtocol(.kitty, true);
+    const kitty_card = try buildUserPromptCard(alloc, "check [Image #1]", &images, 80);
+    defer alloc.free(kitty_card);
+    try std.testing.expect(std.mem.find(u8, kitty_card, "[Image 1]") != null);
+    try std.testing.expect(std.mem.find(u8, kitty_card, "\x1b_Ga=T") != null);
+
+    // 3. Disabled setting falls back to badges only
+    setGraphicsProtocol(.kitty, false);
+    const disabled_card = try buildUserPromptCard(alloc, "check [Image #1]", &images, 80);
+    defer alloc.free(disabled_card);
+    try std.testing.expect(std.mem.find(u8, disabled_card, "[Image 1]") != null);
+    try std.testing.expect(std.mem.find(u8, disabled_card, "\x1b_Ga=T") == null);
+
+    // 4. Protocol none falls back to badges only
+    setGraphicsProtocol(.none, true);
+    const none_card = try buildUserPromptCard(alloc, "check [Image #1]", &images, 80);
+    defer alloc.free(none_card);
+    try std.testing.expect(std.mem.find(u8, none_card, "[Image 1]") != null);
+    try std.testing.expect(std.mem.find(u8, none_card, "\x1b]1337;") == null);
+    try std.testing.expect(std.mem.find(u8, none_card, "\x1b_Ga=T") == null);
 }

@@ -1047,7 +1047,7 @@ test "composeVisibleInputRows paints selected input without changing visible wid
     );
 }
 
-test "composer paints detected keyword with a monochrome moving shimmer" {
+test "composer paints detected keyword with static accent styling" {
     const alloc = std.testing.allocator;
     ui_render.initTheme(false, null);
     defer ui_render.initTheme(false, null);
@@ -1072,8 +1072,11 @@ test "composer paints detected keyword with a monochrome moving shimmer" {
     var moved = try composeVisibleInputRows(alloc, moved_source, window);
     defer moved.deinit(alloc);
 
-    try std.testing.expect(std.mem.find(u8, first.rows.items[0].items, "\x1b[38;5;255m") != null);
-    try std.testing.expect(!std.mem.eql(u8, first.rows.items[0].items, moved.rows.items[0].items));
+    // Keyword units are styled (per-grapheme style+reset), so assert the style
+    // is present rather than a contiguous keyword substring.
+    try std.testing.expect(std.mem.find(u8, first.rows.items[0].items, ui_render.system_notice_label_style) != null);
+    // Static v1 contract: highlight does not vary with shimmer phase.
+    try std.testing.expect(std.mem.eql(u8, first.rows.items[0].items, moved.rows.items[0].items));
     try std.testing.expectEqual(
         display_width.visibleWidthIgnoringAnsi(first.rows.items[0].items),
         display_width.visibleWidthIgnoringAnsi(moved.rows.items[0].items),

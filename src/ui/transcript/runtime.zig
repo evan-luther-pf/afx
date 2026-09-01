@@ -4179,6 +4179,7 @@ pub const TranscriptRuntime = struct {
     command_output_render: CommandOutputRenderPolicy = .{},
     visual_tool_blocks: bool = false,
     fullscreen_display: bool = false,
+    images_enabled: bool = true,
     shimmer_active: bool = false,
     shimmer_row: u16 = 1,
     shimmer_is_overlay: bool = false,

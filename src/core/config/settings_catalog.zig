@@ -49,8 +49,8 @@ pub const SettingId = enum {
     sound_level,
     startup_scrollback,
     prompt_history,
+    images,
 };
-
 pub const Spec = struct {
     id: SettingId,
     category: Category,
@@ -76,6 +76,7 @@ pub const Snapshot = struct {
     fullscreen_display: bool = false,
     startup_scrollback: bool = true,
     prompt_history: bool = true,
+    images: bool = true,
     sound_level: []const u8 = "on",
     agent_profiles: []const u8 = "/agents",
     agent_model: []const u8 = "inherit",
@@ -93,6 +94,10 @@ pub const Snapshot = struct {
             .fast_mode => onOff(self.fast_mode),
             .permission_mode => self.permission_mode,
             .statusline_context => onOff(self.statusline_context),
+            .statusline_session => onOff(self.statusline_session),
+            .statusline_workspace => onOff(self.statusline_workspace),
+            .statusline_cost => onOff(self.statusline_cost),
+            .statusline_git => onOff(self.statusline_git),
             .agent_profiles => self.agent_profiles,
             .agent_model => self.agent_model,
             .agent_effort => self.agent_effort,
@@ -101,17 +106,14 @@ pub const Snapshot = struct {
             .agent_spawns => self.agent_spawns,
             .spawn_depth => self.spawn_depth,
             .hub_wait => self.hub_wait,
-            .statusline_session => onOff(self.statusline_session),
-            .statusline_workspace => onOff(self.statusline_workspace),
-            .statusline_cost => onOff(self.statusline_cost),
-            .statusline_git => onOff(self.statusline_git),
+            .startup_scrollback => onOff(self.startup_scrollback),
+            .prompt_history => onOff(self.prompt_history),
+            .images => onOff(self.images),
+            .sound_level => self.sound_level,
             .slash_menu_categories => onOff(self.slash_menu_categories),
             .tool_display => if (self.visual_tool_blocks) "visual" else "compact",
             .theme => self.theme,
             .display => if (self.fullscreen_display) "fullscreen" else "line-by-line",
-            .startup_scrollback => onOff(self.startup_scrollback),
-            .prompt_history => onOff(self.prompt_history),
-            .sound_level => self.sound_level,
         };
     }
 };
@@ -305,6 +307,7 @@ const specs = [_]Spec{
     .{ .id = .statusline_workspace, .category = .interface, .label = "Status line workspace", .description = "Show the workspace path and Git branch in the status line" },
     .{ .id = .slash_menu_categories, .category = .interface, .label = "Slash menu categories", .description = "Show categories and skill sources in slash-command results" },
     .{ .id = .tool_display, .category = .interface, .label = "Tool display", .description = "Choose OMP-style tool blocks or compact branches" },
+    .{ .id = .images, .category = .interface, .label = "Images", .description = "Render inline images in supported terminals" },
     .{ .id = .theme, .category = .interface, .label = "Theme", .description = "Choose auto, dark, light, or a custom color theme" },
     .{ .id = .display, .category = .interface, .label = "Display", .description = "Choose line-by-line flow or a bottom-pinned fullscreen composer" },
     .{ .id = .model, .category = .agent, .label = "Model", .description = "Choose the model used for new turns" },
@@ -436,6 +439,7 @@ fn staticOptionsFor(id: SettingId) []const []const u8 {
         .slash_menu_categories,
         .startup_scrollback,
         .prompt_history,
+        .images,
         => &on_off_options,
         .theme => &theme_options,
         .tool_display => &tool_display_options,
@@ -495,8 +499,8 @@ test "settings catalog projects grouped searchable preferences" {
         .sound_level = "on",
     };
 
-    try std.testing.expectEqual(@as(usize, 22), filteredCount(snapshot, .all, ""));
-    try std.testing.expectEqual(@as(usize, 7), filteredCount(snapshot, .interface, ""));
+    try std.testing.expectEqual(@as(usize, 23), filteredCount(snapshot, .all, ""));
+    try std.testing.expectEqual(@as(usize, 8), filteredCount(snapshot, .interface, ""));
     try std.testing.expectEqual(@as(usize, 4), filteredCount(snapshot, .agent, ""));
     try std.testing.expectEqual(@as(usize, 8), filteredCount(snapshot, .agents, ""));
     try std.testing.expectEqual(@as(usize, 1), filteredCount(snapshot, .notifications, ""));

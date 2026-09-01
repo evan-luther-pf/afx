@@ -88,6 +88,7 @@ pub const Settings = struct {
     startup_scrollback: ?bool = null,
     visual_tool_blocks: ?bool = null,
     fullscreen_display: ?bool = null,
+    images: ?bool = null,
     prompt_history_enabled: ?bool = null,
     effort: ?types.ReasoningEffort = null,
     statusline_context: ?bool = null,
@@ -152,6 +153,7 @@ pub const ConfigSources = struct {
     startup_scrollback: ConfigSource = .compiled_default,
     visual_tool_blocks: ConfigSource = .compiled_default,
     fullscreen_display: ConfigSource = .compiled_default,
+    images: ConfigSource = .compiled_default,
     prompt_history_enabled: ConfigSource = .compiled_default,
     statusline_context: ConfigSource = .compiled_default,
     statusline_session: ConfigSource = .compiled_default,
@@ -1433,6 +1435,11 @@ fn parseProfileOnlyFields(
         settings.fullscreen_display = value.bool;
     }
 
+    if (root.object.get("images")) |images_value| {
+        const value = images_value;
+        if (value != .bool) return error.InvalidImagesType;
+        settings.images = value.bool;
+    }
     if (root.object.get("prompt_history")) |prompt_history_value| {
         if (prompt_history_value != .object) return error.InvalidPromptHistoryType;
         if (prompt_history_value.object.get("enabled")) |enabled| {
@@ -1543,15 +1550,15 @@ fn mergeSettings(target: *Settings, incoming: *Settings, alloc: Allocator) void 
     if (incoming.first_call_tool_choice) |value| target.first_call_tool_choice = value;
     if (incoming.context) |value| target.context = value;
     if (incoming.fast_mode) |value| target.fast_mode = value;
+    if (incoming.effort) |value| target.effort = value;
     if (incoming.slash_menu_categories) |value| target.slash_menu_categories = value;
     if (incoming.auto_upgrade) |value| target.auto_upgrade = value;
     if (incoming.update_channel) |value| target.update_channel = value;
     if (incoming.startup_scrollback) |value| target.startup_scrollback = value;
     if (incoming.visual_tool_blocks) |value| target.visual_tool_blocks = value;
     if (incoming.fullscreen_display) |value| target.fullscreen_display = value;
+    if (incoming.images) |value| target.images = value;
     if (incoming.prompt_history_enabled) |value| target.prompt_history_enabled = value;
-    if (incoming.effort) |value| target.effort = value;
-
     if (incoming.statusline_context) |value| target.statusline_context = value;
     if (incoming.statusline_session) |value| target.statusline_session = value;
     if (incoming.statusline_workspace) |value| target.statusline_workspace = value;
