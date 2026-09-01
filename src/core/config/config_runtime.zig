@@ -93,6 +93,8 @@ pub const Settings = struct {
     statusline_context: ?bool = null,
     statusline_session: ?bool = null,
     statusline_workspace: ?bool = null,
+    statusline_cost: ?bool = null,
+    statusline_git: ?bool = null,
     notification_turn_end: ?bool = null,
     notification_attention_required: ?bool = null,
     notification_max: ?bool = null,
@@ -154,6 +156,8 @@ pub const ConfigSources = struct {
     statusline_context: ConfigSource = .compiled_default,
     statusline_session: ConfigSource = .compiled_default,
     statusline_workspace: ConfigSource = .compiled_default,
+    statusline_cost: ConfigSource = .compiled_default,
+    statusline_git: ConfigSource = .compiled_default,
     notification_turn_end: ConfigSource = .compiled_default,
     notification_attention_required: ConfigSource = .compiled_default,
     notification_max: ConfigSource = .compiled_default,
@@ -647,6 +651,9 @@ fn updateConfigSources(sources: *ConfigSources, settings: Settings, source: Conf
     if (settings.prompt_history_enabled != null) sources.prompt_history_enabled = source;
     if (settings.statusline_context != null) sources.statusline_context = source;
     if (settings.statusline_session != null) sources.statusline_session = source;
+    if (settings.statusline_workspace != null) sources.statusline_workspace = source;
+    if (settings.statusline_cost != null) sources.statusline_cost = source;
+    if (settings.statusline_git != null) sources.statusline_git = source;
     if (settings.notification_turn_end != null) sources.notification_turn_end = source;
     if (settings.notification_attention_required != null) sources.notification_attention_required = source;
     if (settings.notification_max != null) sources.notification_max = source;
@@ -1462,6 +1469,14 @@ fn parseProfileOnlyFields(
                     settings.statusline_workspace = v.bool;
                 }
             }
+            if (value.object.get("cost")) |v| {
+                if (v != .bool) return error.InvalidStatusLineCostType;
+                settings.statusline_cost = v.bool;
+            }
+            if (value.object.get("git")) |v| {
+                if (v != .bool) return error.InvalidStatusLineGitType;
+                settings.statusline_git = v.bool;
+            }
         }
     }
 
@@ -1540,6 +1555,8 @@ fn mergeSettings(target: *Settings, incoming: *Settings, alloc: Allocator) void 
     if (incoming.statusline_context) |value| target.statusline_context = value;
     if (incoming.statusline_session) |value| target.statusline_session = value;
     if (incoming.statusline_workspace) |value| target.statusline_workspace = value;
+    if (incoming.statusline_cost) |value| target.statusline_cost = value;
+    if (incoming.statusline_git) |value| target.statusline_git = value;
     if (incoming.notification_turn_end) |value| target.notification_turn_end = value;
     if (incoming.notification_attention_required) |value| target.notification_attention_required = value;
     if (incoming.notification_max) |value| target.notification_max = value;

@@ -84,9 +84,9 @@ const file_info_description =
 const memory_description =
     "Save, list, or clear durable user preferences for future afx sessions. When to use: the user explicitly asks to remember, forget, save, or recall a preference. When NOT to use: store task notes, secrets, project facts, temporary context, or anything the user did not ask to persist.";
 const checkpoint_description =
-    "Mark the current saved conversation boundary before an investigation. Only one checkpoint may be active. After investigating, call rewind with a concise findings report before yielding. Checkpoint and rewind replace conversation context only; they never restore files, Git state, artifacts, or processes.";
+    "Mark the current position in the session as the active checkpoint. Only one checkpoint may be active; calling again moves it. After investigating, call rewind with a findings report before yielding.";
 const rewind_description =
-    "Finish the active checkpoint by discarding exploratory conversation after its boundary and retaining one concise findings report. Requires a non-empty report and an active durable checkpoint. Files, Git state, artifacts, and processes are left unchanged.";
+    "Discard exploratory conversation turns after the active checkpoint, replacing them with a concise findings report. Requires an active checkpoint and a non-empty report. Files, Git state, and artifacts are left unchanged.";
 const debug_description =
     "Drive one native Debug Adapter Protocol session. Actions: launch, attach, source/function/instruction/data breakpoints, continue, pause, stepping, threads, stack_trace, scopes, variables, evaluate, disassemble, memory reads/writes, modules, loaded_sources, custom_request, output, terminate, and sessions. Launch auto-selects lldb-dap, debugpy, dlv, gdb, or rdbg; override adapters in .afx/dap.json. Use read-only inspection actions without approval; execution and mutation actions follow normal permission policy.";
 const semantic_search_description =
@@ -1398,18 +1398,16 @@ pub const checkpoint = ToolSpec{
         .name = "checkpoint",
         .description = checkpoint_description,
         .input_schema = .{
-            .properties = &.{
-                .{ .name = "goal", .json_type = .string, .min_length = 1 },
-            },
-            .required = &.{"goal"},
+            .properties = &.{},
+            .required = &.{},
             .additional_properties = false,
         },
     },
     .executor_kind = .todo,
-    .activity_kind = .write,
+    .activity_kind = .read,
     .requires_approval = false,
-    .action_label = "Checkpointing",
-    .completed_action_label = "Checkpointed",
+    .action_label = "Setting checkpoint",
+    .completed_action_label = "Checkpoint set",
     .label_arg_kind = .none,
     .label_arg_default = "conversation",
     .permission_target_kind = .none,
@@ -1428,14 +1426,14 @@ pub const rewind = ToolSpec{
         .description = rewind_description,
         .input_schema = .{
             .properties = &.{
-                .{ .name = "report", .json_type = .string, .min_length = 1 },
+                .{ .name = "report", .json_type = .string, .min_length = 1, .description = "Concise summary of findings from the exploratory investigation." },
             },
             .required = &.{"report"},
             .additional_properties = false,
         },
     },
     .executor_kind = .todo,
-    .activity_kind = .write,
+    .activity_kind = .read,
     .requires_approval = false,
     .action_label = "Rewinding",
     .completed_action_label = "Rewound",

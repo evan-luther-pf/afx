@@ -32,6 +32,7 @@ const gateway_error_format = @import("../shared/gateway_error_format.zig");
 const image_attachments = @import("../images/image_attachments.zig");
 const hooks = @import("../hooks/hooks.zig");
 const notification_sound = @import("../notifications/sound.zig");
+const ui_render = @import("../../ui/render.zig");
 const io_mod = @import("../shared/io.zig");
 const config_runtime = @import("../config/config_runtime.zig");
 const model_capabilities = @import("../config/model_capabilities.zig");
@@ -654,6 +655,7 @@ const AskContext = struct {
             .failed => .@"error",
             .interrupted, .paused => return,
         };
+        self.emitOscNotification(.turn_complete);
         self.playNotification(.turn_end, cue);
     }
 
@@ -663,6 +665,7 @@ const AskContext = struct {
     ) hooks.HandlerError!void {
         const self: *AskContext = @ptrCast(@alignCast(raw));
         if (input.invocation.scope.kind != .ask) return;
+        self.emitOscNotification(.approval_needed);
         self.playNotification(.attention_required, .success);
     }
 
@@ -686,6 +689,17 @@ const AskContext = struct {
             .attention_required => player.playAttention(cue),
             .turn_end => player.play(cue),
         }
+    }
+
+    fn emitOscNotification(self: *AskContext, event: ui_render.NotificationEvent) void {
+        if (!self.deps.stderr_is_tty(self.deps.stderr_ctx)) return;
+        self.writeStderr(ui_render.formatOscNotification(event)) catch |err| {
+            debug_trace.logf(
+                "notifications",
+                "afx ask osc notification write failed err={s}",
+                .{@errorName(err)},
+            );
+        };
     }
 
     fn deinit(self: *AskContext) void {

@@ -388,6 +388,9 @@ pub fn Runtime(comptime App: type) type {
         var file_completions_buf: [input_completion_runtime.file_picker_completion_cap]file_index.SearchResult = undefined;
         var file_match_spans_buf: [input_completion_runtime.file_picker_completion_cap * file_index.max_path_len]file_index.MatchSpan = undefined;
         var file_path_storage_buf: [input_completion_runtime.file_picker_path_storage_cap]u8 = undefined;
+        // Container-scoped: footerContext returns RenderContext by value; a
+        // function-local buffer would leave history_completions dangling.
+        var history_items_buf: [128][]const u8 = undefined;
         noinline fn footerContext(
             app: *App,
             upgrade_status_buf: *[64]u8,
@@ -450,6 +453,15 @@ pub fn Runtime(comptime App: type) type {
                 file_items = file_completions_buf[0..count];
                 file_selection_index = app.input_runtime.picker.file_completion_index;
             }
+            const history_count = if (app.input_runtime.picker.history_search_active)
+                picker_state.filterHistoryEntries(
+                    app.input_runtime.composer_history.entries.items,
+                    app.input_runtime.edit_state.input.items,
+                    &history_items_buf,
+                )
+            else
+                0;
+            const history_items = history_items_buf[0..history_count];
             const inline_completion =
                 input_completion_runtime.CompletionRuntime(App).visibleInlineCompletion(app);
 
@@ -555,6 +567,10 @@ pub fn Runtime(comptime App: type) type {
                     completion.suffix()
                 else
                     "",
+                .history_query_active = app.input_runtime.picker.history_search_active,
+                .history_completions = history_items,
+                .history_completion_index = app.input_runtime.picker.history_selection_index,
+                .history_completion_window_start = app.input_runtime.picker.history_window_start,
                 .auth_picker = app.auth.pickerView(),
                 .skills_menu = if (comptime @hasField(App, "skills"))
                     render_input.skillsMenuProjection(&app.skills)
@@ -1220,6 +1236,7 @@ pub fn Runtime(comptime App: type) type {
                 ) catch app.workspace_identity.snapshot();
                 items.workspace_label = identity.workspace_label;
                 items.git_branch = identity.git_branch;
+                items.git_label = identity.git_label;
             }
             if (app.statusline_context) {
                 items.context_used = app.total_input_tokens;
@@ -1228,6 +1245,13 @@ pub fn Runtime(comptime App: type) type {
             if (comptime @hasField(App, "statusline_session")) {
                 if (app.statusline_session) {
                     items.session_title = app_session_runtime.Runtime(App).cachedSessionTitle(app);
+                }
+            }
+            if (comptime @hasField(App, "statusline_cost") and
+                @hasField(App, "session"))
+            {
+                if (app.statusline_cost) {
+                    items.cost_usd = app.session.usage.total_cost;
                 }
             }
             return items;

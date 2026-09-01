@@ -152,21 +152,23 @@ fn writeInput(
                     try writer.writeByte('}');
                     first_part = false;
                 };
-                for (message.images) |image| {
-                    if (!first_part) try writer.writeByte(',');
-                    var snapshot = try image_attachments.loadVerifiedSnapshot(alloc, image, .{});
-                    defer snapshot.deinit(alloc);
-                    try writeInputImage(writer, alloc, snapshot);
-                    first_part = false;
-                }
-                if (verified_images) |images| {
-                    if (message_index == messages.len - 1) {
-                        for (images) |image| {
-                            if (!first_part) try writer.writeByte(',');
-                            try writeInputImage(writer, alloc, image);
-                            first_part = false;
-                        }
+                const current_images = if (verified_images) |images|
+                    if (message_index == messages.len - 1) images else &.{}
+                else
+                    &.{};
+                if (current_images.len == 0) {
+                    for (message.images) |image| {
+                        if (!first_part) try writer.writeByte(',');
+                        var snapshot = try image_attachments.loadVerifiedSnapshot(alloc, image, .{});
+                        defer snapshot.deinit(alloc);
+                        try writeInputImage(writer, alloc, snapshot);
+                        first_part = false;
                     }
+                }
+                for (current_images) |image| {
+                    if (!first_part) try writer.writeByte(',');
+                    try writeInputImage(writer, alloc, image);
+                    first_part = false;
                 }
                 try writer.writeAll("]}");
             },

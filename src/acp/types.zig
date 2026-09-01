@@ -132,13 +132,38 @@ pub fn writeAgentMessageChunk(w: *std.Io.Writer, text: []const u8) !void {
     try w.writeAll("}}");
 }
 
-pub fn writeUserMessageChunk(w: *std.Io.Writer, text: []const u8) !void {
+pub fn writeUserMessageChunk(
+    w: *std.Io.Writer,
+    text: []const u8,
+    images: []const core_types.ImageAttachment,
+) !void {
     try w.writeAll("{\"sessionUpdate\":\"user_message_chunk\",\"content\":{\"type\":\"text\",\"text\":");
     try writeJsonStr(text, w);
-    try w.writeAll("}}");
+    try w.writeAll("}");
+    if (images.len > 0) {
+        try w.writeAll(",\"_meta\":{\"afx\":{\"images\":[");
+        for (images, 0..) |image, index| {
+            if (index > 0) try w.writeAll(",");
+            try w.writeAll("{\"path\":");
+            try writeJsonStr(image.snapshot_path orelse image.path, w);
+            try w.writeAll(",\"mediaType\":");
+            try writeJsonStr(image.media_type, w);
+            try w.writeAll("}");
+        }
+        try w.writeAll("]}}");
+    }
+    try w.writeAll("}");
 }
 
-pub fn writeToolCall(w: *std.Io.Writer, tool_call_id: []const u8, title: []const u8, kind: ToolCallKind, status: ToolCallStatus) !void {
+pub fn writeToolCall(
+    w: *std.Io.Writer,
+    tool_call_id: []const u8,
+    title: []const u8,
+    kind: ToolCallKind,
+    status: ToolCallStatus,
+    tool_name: []const u8,
+    arguments_json: []const u8,
+) !void {
     try w.writeAll("{\"sessionUpdate\":\"tool_call\",\"toolCallId\":");
     try writeJsonStr(tool_call_id, w);
     try w.writeAll(",\"title\":");
@@ -147,7 +172,11 @@ pub fn writeToolCall(w: *std.Io.Writer, tool_call_id: []const u8, title: []const
     try writeJsonStr(kind.jsonString(), w);
     try w.writeAll(",\"status\":");
     try writeJsonStr(status.jsonString(), w);
-    try w.writeAll("}");
+    try w.writeAll(",\"_meta\":{\"afx\":{\"toolName\":");
+    try writeJsonStr(tool_name, w);
+    try w.writeAll(",\"argumentsJson\":");
+    try writeJsonStr(arguments_json, w);
+    try w.writeAll("}}}");
 }
 
 pub fn writeToolCallUpdate(w: *std.Io.Writer, tool_call_id: []const u8, status: ToolCallStatus, content_text: ?[]const u8) !void {
@@ -177,18 +206,55 @@ pub fn writeToolCallUpdateWithCommandResult(
     try w.writeAll("}");
 }
 
-pub fn writeInitializeResponse(w: *std.Io.Writer) !void {
+pub fn writeToolCallDiffUpdate(
+    w: *std.Io.Writer,
+    tool_call_id: []const u8,
+    preview: []const u8,
+    additions: u32,
+    deletions: u32,
+) !void {
+    try w.writeAll("{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":");
+    try writeJsonStr(tool_call_id, w);
+    try w.writeAll(",\"status\":\"in_progress\",\"content\":[{\"type\":\"content\",\"content\":{\"type\":\"text\",\"text\":");
+    try writeJsonStr(preview, w);
+    try w.writeAll("}}],\"_meta\":{\"afx\":{\"contentKind\":\"diff\",\"additions\":");
+    try w.print("{d}", .{additions});
+    try w.writeAll(",\"deletions\":");
+    try w.print("{d}", .{deletions});
+    try w.writeAll("}}}");
+}
+
+pub fn writeInitializeResponse(
+    w: *std.Io.Writer,
+    config_options_json: ?[]const u8,
+    available_commands_json: ?[]const u8,
+) !void {
     try w.writeAll("{\"protocolVersion\":");
     try w.print("{d}", .{protocol_version});
     try w.writeAll(",\"agentCapabilities\":{");
     try w.writeAll("\"loadSession\":true,");
-    try w.writeAll("\"promptCapabilities\":{\"image\":false,\"audio\":false,\"embeddedContext\":true},");
+    try w.writeAll("\"promptCapabilities\":{\"image\":true,\"audio\":false,\"embeddedContext\":true},");
     try w.writeAll("\"mcpCapabilities\":{\"http\":true,\"sse\":true},");
     try w.writeAll("\"sessionCapabilities\":{\"list\":{},\"resume\":{},\"close\":{}}");
     try w.writeAll("},\"agentInfo\":{\"name\":\"afx\",\"title\":\"afx\",\"version\":");
     try writeJsonStr(build_options.app_version, w);
-    try w.writeAll("},");
-    try w.writeAll("\"authMethods\":[]}");
+    try w.writeAll("},\"authMethods\":[]");
+    if (config_options_json != null or available_commands_json != null) {
+        try w.writeAll(",\"_meta\":{\"afx\":{");
+        var wrote_field = false;
+        if (config_options_json) |config_options| {
+            try w.writeAll("\"configOptions\":");
+            try w.writeAll(config_options);
+            wrote_field = true;
+        }
+        if (available_commands_json) |available_commands| {
+            if (wrote_field) try w.writeAll(",");
+            try w.writeAll("\"availableCommands\":");
+            try w.writeAll(available_commands);
+        }
+        try w.writeAll("}}");
+    }
+    try w.writeAll("}");
 }
 
 pub fn writePromptResponse(w: *std.Io.Writer, reason: StopReason) !void {
@@ -216,9 +282,28 @@ test "writeToolCall produces valid json" {
     const alloc = std.testing.allocator;
     var out: std.Io.Writer.Allocating = .init(alloc);
     defer out.deinit();
-    try writeToolCall(&out.writer, "call_001", "Reading file", .read, .pending);
+    try writeToolCall(&out.writer, "call_001", "Reading file", .read, .pending, "read_file", "{\"path\":\"a.txt\"}");
     try std.testing.expect(std.mem.find(u8, out.writer.buffered(), "\"toolCallId\":\"call_001\"") != null);
     try std.testing.expect(std.mem.find(u8, out.writer.buffered(), "\"kind\":\"read\"") != null);
+    try std.testing.expect(std.mem.find(u8, out.writer.buffered(), "\"toolName\":\"read_file\"") != null);
+    try std.testing.expect(std.mem.find(u8, out.writer.buffered(), "\\\"path\\\":\\\"a.txt\\\"") != null);
+}
+
+test "writeToolCallDiffUpdate preserves structured diff metadata" {
+    const alloc = std.testing.allocator;
+    var out: std.Io.Writer.Allocating = .init(alloc);
+    defer out.deinit();
+    try writeToolCallDiffUpdate(&out.writer, "edit_1", "-old\n+new", 1, 1);
+
+    var parsed = try std.json.parseFromSlice(std.json.Value, alloc, out.writer.buffered(), .{});
+    defer parsed.deinit();
+    const update = parsed.value.object;
+    try std.testing.expectEqualStrings("tool_call_update", update.get("sessionUpdate").?.string);
+    try std.testing.expectEqualStrings(
+        "diff",
+        update.get("_meta").?.object.get("afx").?.object.get("contentKind").?.string,
+    );
+    try std.testing.expectEqual(@as(i64, 1), update.get("_meta").?.object.get("afx").?.object.get("additions").?.integer);
 }
 
 test "writePromptResponse produces valid json" {
@@ -295,7 +380,7 @@ test "writeInitializeResponse contains required fields" {
     const alloc = std.testing.allocator;
     var out: std.Io.Writer.Allocating = .init(alloc);
     defer out.deinit();
-    try writeInitializeResponse(&out.writer);
+    try writeInitializeResponse(&out.writer, "[{\"id\":\"model\"}]", "[{\"name\":\"help\"}]");
     var parsed = try std.json.parseFromSlice(std.json.Value, alloc, out.writer.buffered(), .{});
     defer parsed.deinit();
 
@@ -308,19 +393,28 @@ test "writeInitializeResponse contains required fields" {
         build_options.app_version,
         parsed.value.object.get("agentInfo").?.object.get("version").?.string,
     );
-    try std.testing.expect(std.mem.find(u8, out.writer.buffered(), "\"image\":false") != null);
+    try std.testing.expect(std.mem.find(u8, out.writer.buffered(), "\"image\":true") != null);
     try std.testing.expect(std.mem.find(u8, out.writer.buffered(), "\"list\":{}") != null);
     try std.testing.expect(std.mem.find(u8, out.writer.buffered(), "\"resume\":{}") != null);
     try std.testing.expect(std.mem.find(u8, out.writer.buffered(), "\"close\":{}") != null);
     try std.testing.expect(mcp_capabilities.get("http").?.bool);
     try std.testing.expect(mcp_capabilities.get("sse").?.bool);
+    const metadata = parsed.value.object.get("_meta").?.object.get("afx").?.object;
+    try std.testing.expectEqualStrings(
+        "model",
+        metadata.get("configOptions").?.array.items[0].object.get("id").?.string,
+    );
+    try std.testing.expectEqualStrings(
+        "help",
+        metadata.get("availableCommands").?.array.items[0].object.get("name").?.string,
+    );
 }
 
 test "writeUserMessageChunk produces valid json" {
     const alloc = std.testing.allocator;
     var out: std.Io.Writer.Allocating = .init(alloc);
     defer out.deinit();
-    try writeUserMessageChunk(&out.writer, "User says hello");
+    try writeUserMessageChunk(&out.writer, "User says hello", &.{});
     try std.testing.expect(std.mem.find(u8, out.writer.buffered(), "\"user_message_chunk\"") != null);
     try std.testing.expect(std.mem.find(u8, out.writer.buffered(), "User says hello") != null);
 }

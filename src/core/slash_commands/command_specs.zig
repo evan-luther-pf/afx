@@ -40,6 +40,7 @@ pub const SlashKind = enum {
     resume_session,
     continue_recovery,
     rename_session,
+    fork,
     help,
     login,
     logout,
@@ -62,6 +63,8 @@ pub const SlashKind = enum {
     skills,
     agents,
     copy,
+    dump,
+    export_session,
     feedback,
     trace,
     compact,
@@ -76,6 +79,7 @@ pub const SlashKind = enum {
     statusline,
     notifications,
     workspace,
+    hotkeys,
     version,
 };
 
@@ -162,6 +166,36 @@ pub const SlashPresentationCategory = enum {
     }
 };
 
+pub const SlashExecution = enum {
+    control,
+    structured,
+    prompt,
+};
+
+pub const SlashGuiPresentation = enum {
+    model_tab,
+    session_tabs,
+    provider_panel,
+    permissions_panel,
+    help_panel,
+    runtime_panel,
+    form,
+    immediate,
+    transcript,
+};
+
+pub const SlashResultPresentation = enum {
+    none,
+    toast,
+    panel,
+    transcript,
+};
+
+pub const SlashDanger = enum {
+    none,
+    confirm,
+};
+
 pub const SlashSpec = struct {
     kind: SlashKind,
     command: []const u8,
@@ -174,6 +208,99 @@ pub const SlashSpec = struct {
     has_args: bool = false,
     accepts_payload: bool = false,
     requires_prompt_credential: bool = false,
+    pub fn guiAvailable(self: SlashSpec) bool {
+        return switch (self.kind) {
+            .image,
+            .images,
+            .allowlist,
+            .trace,
+            .settings,
+            .alias,
+            .paste,
+            .statusline,
+            .notifications,
+            .export_session,
+            => false,
+            else => true,
+        };
+    }
+
+    pub fn guiExecution(self: SlashSpec) SlashExecution {
+        return switch (self.kind) {
+            .help,
+            .clear_screen,
+            .new_session,
+            .reset_session,
+            .resume_session,
+            .fork,
+            .login,
+            .logout,
+            .providers,
+            .image,
+            .images,
+            .model,
+            .models,
+            .permissions,
+            .allowlist,
+            .agents,
+            .mcp,
+            .skills,
+            .settings,
+            .workspace,
+            => .control,
+            else => .structured,
+        };
+    }
+
+    pub fn guiPresentation(self: SlashSpec) SlashGuiPresentation {
+        return switch (self.kind) {
+            .model, .models => .model_tab,
+            .new_session, .resume_session, .fork => .session_tabs,
+            .login, .logout, .providers => .provider_panel,
+            .permissions, .allowlist => .permissions_panel,
+            .help => .help_panel,
+            .status, .stats, .usage, .credits, .version => .runtime_panel,
+            .continue_recovery, .tree, .handoff => .transcript,
+            .background,
+            .image,
+            .images,
+            .mcp,
+            .skills,
+            .settings,
+            .alias,
+            .statusline,
+            .notifications,
+            .workspace,
+            .export_session,
+            => .form,
+            else => .immediate,
+        };
+    }
+
+    pub fn guiResult(self: SlashSpec) SlashResultPresentation {
+        return switch (self.guiPresentation()) {
+            .help_panel,
+            .runtime_panel,
+            .provider_panel,
+            .permissions_panel,
+            .form,
+            => .panel,
+            .transcript => .transcript,
+            .model_tab, .session_tabs => .none,
+            .immediate => .toast,
+        };
+    }
+
+    pub fn guiDanger(self: SlashSpec) SlashDanger {
+        return switch (self.kind) {
+            .logout, .undo, .quit => .confirm,
+            else => .none,
+        };
+    }
+
+    pub fn guiAction(self: SlashSpec) []const u8 {
+        return if (self.command.len > 1) self.command[1..] else self.command;
+    }
 };
 
 pub const SlashRegistry = mod_registry.CommandRegistry(SlashSpec);
@@ -699,6 +826,8 @@ const statusline_arg_completions = [_][]const u8{
     "/statusline context",
     "/statusline session",
     "/statusline workspace",
+    "/statusline cost",
+    "/statusline git",
 };
 
 const notifications_arg_completions = [_][]const u8{
@@ -1760,11 +1889,12 @@ test "slash completion categories follow canonical entries" {
 test "help catalog groups visible commands and searches all command metadata" {
     const registry = testSlashRegistry();
 
-    try std.testing.expectEqual(@as(usize, 41), helpCatalogCount(registry, ""));
+    try std.testing.expectEqual(@as(usize, 45), helpCatalogCount(registry, ""));
     try std.testing.expectEqualStrings("/help", helpCatalogSpecAt(registry, "", 0).?.command);
-    try std.testing.expectEqual(@as(usize, 5), helpCatalogCategoryCount(registry, "", .general));
+    try std.testing.expectEqual(@as(usize, 6), helpCatalogCategoryCount(registry, "", .general));
     try std.testing.expectEqual(@as(usize, 3), helpCatalogCount(registry, "appearance"));
-    try std.testing.expectEqualStrings("/paste", helpCatalogSpecAt(registry, "clipboard", 0).?.command);
+    try std.testing.expectEqualStrings("/dump", helpCatalogSpecAt(registry, "clipboard", 0).?.command);
+    try std.testing.expectEqualStrings("/paste", helpCatalogSpecAt(registry, "clipboard", 1).?.command);
 }
 
 test "help menu selection follows the filtered catalog without executing commands" {
@@ -2017,6 +2147,22 @@ test "workspace completions expose actions and keep path actions open" {
     try std.testing.expect(slashCompletionHasArgs(testSlashRegistry(), "/workspace add"));
     try std.testing.expect(slashCompletionHasArgs(testSlashRegistry(), "/workspace remove"));
     try std.testing.expect(!slashCompletionHasArgs(testSlashRegistry(), "/workspace clear"));
+}
+
+test "slash completions include statusline controls" {
+    try std.testing.expectEqual(@as(usize, 5), slashCompletionCount(testSlashRegistry(), "/statusline "));
+    try std.testing.expectEqualStrings("/statusline context", nthSlashCompletion(testSlashRegistry(), "/statusline ", 0).?);
+    try std.testing.expectEqualStrings("/statusline session", nthSlashCompletion(testSlashRegistry(), "/statusline ", 1).?);
+    try std.testing.expectEqualStrings("/statusline workspace", nthSlashCompletion(testSlashRegistry(), "/statusline ", 2).?);
+    try std.testing.expectEqualStrings("/statusline cost", nthSlashCompletion(testSlashRegistry(), "/statusline ", 3).?);
+    try std.testing.expectEqualStrings("/statusline git", nthSlashCompletion(testSlashRegistry(), "/statusline ", 4).?);
+    try std.testing.expectEqual(@as(usize, 2), slashCompletionCount(testSlashRegistry(), "/statusline c"));
+    try std.testing.expectEqualStrings("/statusline context", nthSlashCompletion(testSlashRegistry(), "/statusline c", 0).?);
+    try std.testing.expectEqualStrings("/statusline cost", nthSlashCompletion(testSlashRegistry(), "/statusline c", 1).?);
+    try std.testing.expectEqual(@as(usize, 1), slashCompletionCount(testSlashRegistry(), "/statusline cos"));
+    try std.testing.expectEqualStrings("cost", nthSlashCompletionLabel(testSlashRegistry(), "/statusline cos", 0).?);
+    try std.testing.expectEqual(@as(usize, 1), slashCompletionCount(testSlashRegistry(), "/statusline gi"));
+    try std.testing.expectEqualStrings("git", nthSlashCompletionLabel(testSlashRegistry(), "/statusline gi", 0).?);
 }
 
 test "slash completions include sound controls" {

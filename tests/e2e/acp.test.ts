@@ -1998,7 +1998,7 @@ describe("acp: model-independent", () => {
   );
 
   test(
-    "initialize reports that image prompt blocks are unsupported",
+    "initialize advertises verified local image prompt blocks",
     async () => {
       const root = createIsolatedRoot("afx-acp-initialize-");
       try {
@@ -2032,7 +2032,7 @@ describe("acp: model-independent", () => {
         expect(resp.result.agentInfo.name).toBe("afx");
         expect(resp.result.agentInfo.version).toBe(version.stdout.trim());
         expect(resp.result.agentCapabilities.loadSession).toBe(true);
-        expect(resp.result.agentCapabilities.promptCapabilities.image).toBe(false);
+        expect(resp.result.agentCapabilities.promptCapabilities.image).toBe(true);
         expect(resp.result.agentCapabilities.mcpCapabilities.http).toBe(true);
         expect(resp.result.agentCapabilities.mcpCapabilities.sse).toBe(true);
         expect(resp.result.agentCapabilities.sessionCapabilities.resume).toEqual({});
@@ -6553,9 +6553,10 @@ describe("acp: model-independent", () => {
           timeoutMs: TIMEOUT,
         });
         expect(acknowledged.code).toBe(0);
-        expect(gateway.requests.at(-1)?.body).toContain(
-          "ACP_ONE_OFF_LOAD_CHILD_DONE",
+        const acknowledgeRequest = [...gateway.requests].reverse().find((request) =>
+          request.body.includes("Acknowledge the completed one-off result.")
         );
+        expect(acknowledgeRequest?.body).toContain("ACP_ONE_OFF_LOAD_CHILD_DONE");
         await waitForCondition(
           "ACP one-off child retirement",
           () => !existsSync(control.path),

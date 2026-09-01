@@ -34,6 +34,53 @@ pub const ItemRow = struct {
     row: u32,
 };
 
+pub const SearchState = struct {
+    input_active: bool = false,
+    query_len: u8 = 0,
+    query_buf: [128]u8 = undefined,
+    active_match_index: ?u32 = null,
+    total_matches: u32 = 0,
+
+    pub fn query(self: *const SearchState) []const u8 {
+        return self.query_buf[0..self.query_len];
+    }
+
+    pub fn isActive(self: *const SearchState) bool {
+        return self.input_active or self.query_len > 0;
+    }
+
+    pub fn clear(self: *SearchState) void {
+        self.input_active = false;
+        self.query_len = 0;
+        self.active_match_index = null;
+        self.total_matches = 0;
+    }
+
+    pub fn open(self: *SearchState) void {
+        self.input_active = true;
+        self.query_len = 0;
+        self.active_match_index = null;
+        self.total_matches = 0;
+    }
+
+    pub fn appendChar(self: *SearchState, c: u8) bool {
+        if (self.query_len >= self.query_buf.len) return false;
+        self.query_buf[self.query_len] = c;
+        self.query_len += 1;
+        return true;
+    }
+
+    pub fn popChar(self: *SearchState) bool {
+        if (self.query_len == 0) return false;
+        self.query_len -= 1;
+        return true;
+    }
+
+    pub fn confirm(self: *SearchState) void {
+        self.input_active = false;
+    }
+};
+
 pub const Snapshot = struct {
     depth: Depth,
     scroll_rows: u32,
@@ -44,6 +91,7 @@ pub const Snapshot = struct {
     bookmark_intra_row: u32,
     bookmark_pending: bool,
     projection_cols: ?u16,
+    search: SearchState = .{},
 };
 
 pub const OffsetSelection = struct {
@@ -61,6 +109,7 @@ pub const State = struct {
     bookmark_intra_row: u32 = 0,
     bookmark_pending: bool = false,
     projection_cols: ?u16 = null,
+    search: SearchState = .{},
 
     pub fn with_depth(self: State, requested: Depth) State {
         if (self.depth == requested) return self;
@@ -89,6 +138,7 @@ pub const State = struct {
     pub fn closed(self: State) State {
         var next = self.reset_viewport().clear_anchor();
         next.depth = .inline_mode;
+        next.search.clear();
         return next;
     }
 
@@ -185,6 +235,7 @@ pub const State = struct {
             .bookmark_intra_row = self.bookmark_intra_row,
             .bookmark_pending = self.bookmark_pending,
             .projection_cols = self.projection_cols,
+            .search = self.search,
         };
     }
 
@@ -199,6 +250,7 @@ pub const State = struct {
             .bookmark_intra_row = saved.bookmark_intra_row,
             .bookmark_pending = saved.bookmark_pending,
             .projection_cols = saved.projection_cols,
+            .search = saved.search,
         };
     }
 
@@ -408,4 +460,30 @@ test "transcript presentation snapshot round trips all state" {
         .projection_cols = 40,
     };
     try std.testing.expectEqualDeep(state, State.from_snapshot(state.snapshot()));
+}
+
+test "search state mutations and transitions" {
+    var search = SearchState{};
+    try std.testing.expect(!search.isActive());
+    try std.testing.expectEqualStrings("", search.query());
+
+    search.open();
+    try std.testing.expect(search.isActive());
+    try std.testing.expect(search.input_active);
+
+    try std.testing.expect(search.appendChar('f'));
+    try std.testing.expect(search.appendChar('o'));
+    try std.testing.expect(search.appendChar('o'));
+    try std.testing.expectEqualStrings("foo", search.query());
+
+    try std.testing.expect(search.popChar());
+    try std.testing.expectEqualStrings("fo", search.query());
+
+    search.confirm();
+    try std.testing.expect(!search.input_active);
+    try std.testing.expect(search.isActive());
+
+    search.clear();
+    try std.testing.expect(!search.isActive());
+    try std.testing.expectEqualStrings("", search.query());
 }

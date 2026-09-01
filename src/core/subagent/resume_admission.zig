@@ -158,7 +158,7 @@ fn listActionablePageInternal(
     return result;
 }
 
-fn summaryIsActionable(
+pub fn summaryIsActionable(
     store: session_store.Store,
     alloc: Allocator,
     session_id: []const u8,

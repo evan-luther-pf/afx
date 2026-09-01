@@ -9,6 +9,7 @@ const server = @import("server.zig");
 const session_test_controls = @import("session_test_controls.zig");
 const session_codec = @import("../core/session/session_codec.zig");
 const session_store = @import("../core/session/session_store.zig");
+const session_catalog = @import("../core/session/session_catalog.zig");
 const js_host_session_store = @import("../core/session/js_host_session_store.zig");
 const session_runtime = @import("../core/session/session.zig");
 const mcp_runtime = @import("../core/mcp/mcp_runtime.zig");
@@ -22,6 +23,7 @@ const subagent_resume_admission = @import("../core/subagent/resume_admission.zig
 const types = @import("../core/shared/types.zig");
 const context_contract = @import("../core/workspace/context_contract.zig");
 const command_specs = @import("../core/slash_commands/command_specs.zig");
+const builtin_commands = @import("../builtins/commands.zig");
 const test_builtin_gateway = if (builtin.is_test)
     @import("../builtins/gateway.zig")
 else
@@ -223,14 +225,7 @@ pub fn handleNewSession(state: *server.ServerState, alloc: Allocator, msg: *json
         .effort = state.effort,
         .session_rt = session_rt,
         .mcp = session_mcp,
-    }) catch {
-        _ = store.discardPristineStartedSession(alloc, &writable);
-        writable_owned = false;
-        return state.writer.writeError(alloc, msg.id, .{
-            .code = ErrorCode.internal_error,
-            .message = "Failed to save active session",
-        });
-    };
+    });
     writable_owned = false;
     store_owned = false;
     session_id_owned = false;
@@ -268,6 +263,8 @@ fn writeNewSessionResponse(
         state.cfg.mode_registry,
         state.cfg.mode_registry.default_mode_id,
     );
+    try out.writer.writeAll(",");
+    try writeFastConfigOption(&out.writer, state.active_session.?.fast_mode);
     try out.writer.writeAll("],\"modes\":{\"currentModeId\":");
     try writeJsonStr(state.cfg.mode_registry.default_mode_id, &out.writer);
     try out.writer.writeAll(",\"availableModes\":");
@@ -610,11 +607,7 @@ fn handleRestoreSession(
         .effort = writable.state.preferences.effort,
         .session_rt = session_rt,
         .mcp = session_mcp,
-    }) catch
-        return state.writer.writeError(alloc, msg.id, .{
-            .code = ErrorCode.internal_error,
-            .message = "Failed to save active session",
-        });
+    });
     writable_owned = false;
     store_owned = false;
     sid_owned = false;
@@ -648,7 +641,7 @@ fn sendPendingRecoveryUpdate(
     checkpoint: ?session_codec.RecoveryCheckpoint,
 ) !void {
     const recovery = checkpoint orelse return;
-    try sendUserHistoryChunk(state, alloc, session_id, recovery.user.text);
+    try sendUserHistoryChunk(state, alloc, session_id, recovery.user.text, recovery.user.images);
     try sendExecutionHistory(state, alloc, session_id, recovery.execution);
     if (recovery.assistant_source.len > 0) {
         try sendAgentHistoryChunk(state, alloc, session_id, recovery.assistant_source);
@@ -707,6 +700,8 @@ fn writeLoadSessionResponse(
         state.cfg.mode_registry,
         state.cfg.mode_registry.default_mode_id,
     );
+    try out.writer.writeAll(",");
+    try writeFastConfigOption(&out.writer, state.active_session.?.fast_mode);
     try out.writer.writeAll("],\"modes\":{\"currentModeId\":");
     try writeJsonStr(state.cfg.mode_registry.default_mode_id, &out.writer);
     try out.writer.writeAll(",\"availableModes\":");
@@ -765,8 +760,8 @@ fn activateSession(
     state: *server.ServerState,
     store: session_store.Store,
     activation: SessionActivation,
-) !void {
-    try server.releaseActiveSession(state);
+) void {
+    server.releaseActiveSessionForSwitch(state);
     state.active_session = .{
         .session_id = activation.session_id,
         .store = store,
@@ -910,10 +905,15 @@ pub fn handleListSessions(state: *server.ServerState, alloc: Allocator, msg: *js
     defer out.deinit();
 
     try out.writer.writeAll("{\"sessions\":[");
-    for (session_list.items, 0..) |summary, i| {
-        if (i > 0) try out.writer.writeAll(",");
+    var first = true;
+    for (session_list.items) |summary| {
+        if (!try subagent_resume_admission.summaryIsActionable(store, alloc, summary.id)) continue;
+        if (!first) try out.writer.writeAll(",");
+        first = false;
         try out.writer.writeAll("{\"sessionId\":");
         try writeJsonStr(summary.id, &out.writer);
+        try out.writer.writeAll(",\"title\":");
+        try writeJsonStr(session_catalog.displayTitle(summary), &out.writer);
         try out.writer.writeAll(",\"cwd\":");
         try writeJsonStr(state.workspace_root, &out.writer);
         try out.writer.writeAll(",\"updatedAt\":");
@@ -934,8 +934,14 @@ fn sendHistoryTurnAsUpdates(state: *server.ServerState, alloc: Allocator, sessio
         .interrupted => |i| i.user.text,
         .compacted_summary => |c| c.summary,
     };
+    const user_images: []const types.ImageAttachment = switch (turn) {
+        .assistant => |a| a.user.images,
+        .background_command => |b| b.user.images,
+        .interrupted => |i| i.user.images,
+        .compacted_summary => &.{},
+    };
 
-    try sendUserHistoryChunk(state, alloc, session_id, user_text);
+    try sendUserHistoryChunk(state, alloc, session_id, user_text, user_images);
 
     switch (turn) {
         .assistant => |assistant| {
@@ -967,13 +973,19 @@ fn sendHistoryTurnAsUpdates(state: *server.ServerState, alloc: Allocator, sessio
     }
 }
 
-fn sendUserHistoryChunk(state: *server.ServerState, alloc: Allocator, session_id: []const u8, text: []const u8) !void {
+fn sendUserHistoryChunk(
+    state: *server.ServerState,
+    alloc: Allocator,
+    session_id: []const u8,
+    text: []const u8,
+    images: []const types.ImageAttachment,
+) !void {
     var out: std.Io.Writer.Allocating = .init(alloc);
     defer out.deinit();
     try out.writer.writeAll("{\"sessionId\":");
     try writeJsonStr(session_id, &out.writer);
     try out.writer.writeAll(",\"update\":");
-    try acp_types.writeUserMessageChunk(&out.writer, text);
+    try acp_types.writeUserMessageChunk(&out.writer, text, images);
     try out.writer.writeAll("}");
     try state.writer.writeNotification(alloc, "session/update", out.writer.buffered());
 }
@@ -1011,42 +1023,47 @@ fn sendAvailableCommands(state: *server.ServerState, alloc: Allocator, session_i
     try state.writer.writeNotification(alloc, "session/update", out.writer.buffered());
 }
 
-fn buildSlashCommandsJson(alloc: Allocator) ![]u8 {
+pub fn buildSlashCommandsJson(alloc: Allocator) ![]u8 {
     var out: std.Io.Writer.Allocating = .init(alloc);
     defer out.deinit();
 
-    const commands = [_]struct { name: []const u8, description: []const u8, hint: ?[]const u8 }{
-        .{ .name = "compact", .description = "Compact conversation history", .hint = null },
-        .{ .name = "undo", .description = "Undo last file change", .hint = null },
-        .{ .name = "changes", .description = "Show file changes in this session", .hint = null },
-        .{ .name = "review", .description = "Toggle post-edit review", .hint = null },
-        .{ .name = "clear", .description = "Clear the screen", .hint = null },
-        .{ .name = "reset", .description = "Reset session", .hint = null },
-        .{ .name = "help", .description = "Show available commands", .hint = null },
-        .{ .name = "status", .description = "Show current status", .hint = null },
-        .{ .name = "model", .description = "Switch model", .hint = "model name" },
-        .{ .name = "permissions", .description = "Show permission settings", .hint = null },
-        .{ .name = "allowlist", .description = "Manage persistent allow rules", .hint = "add command \"git *\"" },
-        .{ .name = "rules", .description = "Show active rules", .hint = null },
-        .{ .name = "settings", .description = "Show settings", .hint = null },
-        .{ .name = "credits", .description = "Show credit balance", .hint = null },
-        .{ .name = "mcp", .description = "Show MCP server status", .hint = null },
-        .{ .name = "skills", .description = "Show installed skills", .hint = null },
-        .{ .name = "fast", .description = "Toggle fast mode for supported models", .hint = null },
-    };
-
     try out.writer.writeAll("[");
-    for (commands, 0..) |cmd, i| {
-        if (i > 0) try out.writer.writeAll(",");
+    var wrote_command = false;
+    for (builtin_commands.slash_specs) |spec| {
+        const description = spec.completion_description orelse continue;
+        const category = spec.presentation_category orelse continue;
+        const help_entry = spec.help_entry orelse continue;
+        if (!spec.guiAvailable()) continue;
+        if (spec.command.len < 2 or spec.command[0] != '/') continue;
+
+        if (wrote_command) try out.writer.writeAll(",");
+        wrote_command = true;
         try out.writer.writeAll("{\"name\":");
-        try writeJsonStr(cmd.name, &out.writer);
+        try writeJsonStr(spec.command[1..], &out.writer);
         try out.writer.writeAll(",\"description\":");
-        try writeJsonStr(cmd.description, &out.writer);
-        if (cmd.hint) |hint| {
-            try out.writer.writeAll(",\"input\":{\"hint\":");
-            try writeJsonStr(hint, &out.writer);
-            try out.writer.writeAll("}");
+        try writeJsonStr(description, &out.writer);
+        try out.writer.writeAll(",\"category\":");
+        try writeJsonStr(category.label(), &out.writer);
+
+        if (spec.has_args and help_entry.len > spec.command.len) {
+            const hint = std.mem.trim(u8, help_entry[spec.command.len..], " \t");
+            if (hint.len > 0) {
+                try out.writer.writeAll(",\"input\":{\"type\":\"text\",\"hint\":");
+                try writeJsonStr(hint, &out.writer);
+                try out.writer.writeAll("}");
+            }
         }
+        try out.writer.writeAll(",\"_meta\":{\"afx\":{\"execution\":");
+        try writeJsonStr(@tagName(spec.guiExecution()), &out.writer);
+        try out.writer.writeAll(",\"presentation\":");
+        try writeJsonStr(@tagName(spec.guiPresentation()), &out.writer);
+        try out.writer.writeAll(",\"action\":");
+        try writeJsonStr(spec.guiAction(), &out.writer);
+        try out.writer.writeAll(",\"result\":");
+        try writeJsonStr(@tagName(spec.guiResult()), &out.writer);
+        try out.writer.writeAll(",\"danger\":");
+        try writeJsonStr(@tagName(spec.guiDanger()), &out.writer);
+        try out.writer.writeAll("}}");
         try out.writer.writeAll("}");
     }
     try out.writer.writeAll("]");
@@ -1146,6 +1163,12 @@ pub fn writeModeConfigOption(
     try w.writeAll("]}");
 }
 
+pub fn writeFastConfigOption(w: *std.Io.Writer, enabled: bool) !void {
+    try w.writeAll("{\"id\":\"fast_mode\",\"name\":\"Fast Mode\",\"category\":\"model\",\"type\":\"select\",\"currentValue\":");
+    try writeJsonStr(if (enabled) "on" else "off", w);
+    try w.writeAll(",\"options\":[{\"value\":\"off\",\"name\":\"Off\"},{\"value\":\"on\",\"name\":\"On\"}]}");
+}
+
 fn writeModesArray(w: *std.Io.Writer, registry: mode_registry.Registry) !void {
     try w.writeAll("[");
     for (registry.modes, 0..) |mode, i| {
@@ -1177,7 +1200,8 @@ test "buildSlashCommandsJson produces valid array" {
     try std.testing.expect(json.len > 0);
     try std.testing.expect(json[0] == '[');
     try std.testing.expect(json[json.len - 1] == ']');
-    try std.testing.expect(std.mem.find(u8, json, "compact") != null);
+    try std.testing.expect(std.mem.find(u8, json, "\"name\":\"help\"") != null);
+    try std.testing.expect(std.mem.find(u8, json, "\"category\":\"Session\"") != null);
 }
 
 test "buildSlashCommandsJson includes all expected commands" {
@@ -1186,10 +1210,9 @@ test "buildSlashCommandsJson includes all expected commands" {
     defer alloc.free(json);
 
     const expected_commands = [_][]const u8{
-        "compact",   "undo",  "changes",  "review",  "clear",
-        "reset",     "help",  "status",   "model",   "permissions",
-        "allowlist", "rules", "settings", "credits", "mcp",
-        "skills",    "fast",
+        "help",  "status", "new",       "clear", "reset",   "permissions",
+        "model", "models", "providers", "login", "logout",  "fast",
+        "mcp",   "skills", "continue",  "tree",  "handoff", "plan",
     };
     for (expected_commands) |cmd| {
         try std.testing.expect(std.mem.find(u8, json, cmd) != null);
@@ -1197,11 +1220,14 @@ test "buildSlashCommandsJson includes all expected commands" {
     try std.testing.expect(std.mem.find(u8, json, "\"name\":\"summary\"") == null);
 }
 
-test "buildSlashCommandsJson includes input hint for model" {
+test "buildSlashCommandsJson excludes internal subcommands" {
     const alloc = std.testing.allocator;
     const json = try buildSlashCommandsJson(alloc);
     defer alloc.free(json);
-    try std.testing.expect(std.mem.find(u8, json, "\"input\":{\"hint\":\"model name\"}") != null);
+    try std.testing.expect(std.mem.find(u8, json, "\"name\":\"background stop\"") == null);
+    try std.testing.expect(std.mem.find(u8, json, "\"input\":{\"type\":\"text\",\"hint\":\"<id-or-query>\"}") != null);
+    try std.testing.expect(std.mem.find(u8, json, "\"presentation\":\"model_tab\"") != null);
+    try std.testing.expect(std.mem.find(u8, json, "\"execution\":\"control\"") != null);
 }
 
 test "formatIso8601 produces known timestamp" {

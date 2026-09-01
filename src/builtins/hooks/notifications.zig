@@ -5,6 +5,7 @@ const notification_contract = @import("../../core/notifications/notification_con
 const notification_sound = @import("../../core/notifications/sound.zig");
 const debug_trace = @import("../../core/shared/debug_trace.zig");
 const app_session_runtime = @import("../../core/app/app_session_runtime.zig");
+const ui_render = @import("../../ui/render.zig");
 
 const Preferences = notification_contract.Preferences;
 const Kind = notification_contract.Kind;
@@ -197,6 +198,12 @@ fn Runtime(comptime App: type) type {
                 );
                 return;
             };
+            if (ready.attention_required > 0) {
+                app.shell.writeNotificationOsc(&app.metrics, .approval_needed);
+            }
+            if (ready.turn_end_success > 0 or ready.turn_end_error > 0) {
+                app.shell.writeNotificationOsc(&app.metrics, .turn_complete);
+            }
             deliver(player, .attention_required, .success, ready.attention_required);
             deliver(player, .turn_end, .success, ready.turn_end_success);
             deliver(player, .turn_end, .@"error", ready.turn_end_error);
@@ -406,4 +413,86 @@ test "max gate requires both sound on and max selected" {
     // Sound off suppresses max even if the flag lingers.
     state.setPreferences(.{ .turn_end = false, .attention_required = false, .max = true });
     try std.testing.expect(!state.maxEnabled());
+}
+
+test "Runtime flush emits OSC 9 notification sequences" {
+    const types = @import("../../core/shared/types.zig");
+    const FakeShell = struct {
+        osc_events: std.ArrayListUnmanaged(ui_render.NotificationEvent) = .empty,
+        metrics: types.Metrics = .{},
+
+        pub fn writeNotificationOsc(self: *@This(), _: *types.Metrics, event: ui_render.NotificationEvent) void {
+            self.osc_events.append(std.testing.allocator, event) catch unreachable;
+        }
+
+        pub fn writeNotificationBell(_: *@This(), _: *types.Metrics) void {}
+    };
+
+    const FakeApp = struct {
+        notifications: State = .{},
+        pacer: struct {
+            pub fn hasPending(_: @This()) bool {
+                return false;
+            }
+        } = .{},
+        shell: FakeShell = .{},
+        metrics: types.Metrics = .{},
+    };
+
+    var app = FakeApp{};
+    defer app.shell.osc_events.deinit(std.testing.allocator);
+    app.notifications.configure(.{
+        .ctx = &app,
+        .emit = struct {
+            fn emit(_: *anyopaque) void {}
+        }.emit,
+    });
+    app.notifications.setPreferences(.{ .turn_end = true, .attention_required = true });
+    _ = app.notifications.queue(.{ .kind = .turn_end, .cue = .success }, false);
+    _ = app.notifications.queue(.{ .kind = .attention_required }, false);
+
+    Runtime(FakeApp).flush(&app);
+
+    try std.testing.expectEqual(@as(usize, 2), app.shell.osc_events.items.len);
+    try std.testing.expectEqual(ui_render.NotificationEvent.approval_needed, app.shell.osc_events.items[0]);
+    try std.testing.expectEqual(ui_render.NotificationEvent.turn_complete, app.shell.osc_events.items[1]);
+}
+
+test "Runtime flush emits nothing when notifications are disabled" {
+    const types = @import("../../core/shared/types.zig");
+    const FakeShell = struct {
+        osc_events: std.ArrayListUnmanaged(ui_render.NotificationEvent) = .empty,
+        metrics: types.Metrics = .{},
+
+        pub fn writeNotificationOsc(self: *@This(), _: *types.Metrics, event: ui_render.NotificationEvent) void {
+            self.osc_events.append(std.testing.allocator, event) catch unreachable;
+        }
+
+        pub fn writeNotificationBell(_: *@This(), _: *types.Metrics) void {}
+    };
+
+    const FakeApp = struct {
+        notifications: State = .{},
+        pacer: struct {
+            pub fn hasPending(_: @This()) bool {
+                return false;
+            }
+        } = .{},
+        shell: FakeShell = .{},
+        metrics: types.Metrics = .{},
+    };
+
+    var app = FakeApp{};
+    defer app.shell.osc_events.deinit(std.testing.allocator);
+    app.notifications.configure(.{
+        .ctx = &app,
+        .emit = struct {
+            fn emit(_: *anyopaque) void {}
+        }.emit,
+    });
+    app.notifications.setPreferences(.{ .turn_end = false, .attention_required = false });
+
+    Runtime(FakeApp).flush(&app);
+
+    try std.testing.expectEqual(@as(usize, 0), app.shell.osc_events.items.len);
 }

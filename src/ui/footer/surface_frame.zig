@@ -359,6 +359,7 @@ fn buildFooterSurfaceProjection(
     const stream_suppresses_file_query = ctx.stream.active and !ctx.queued_editor_active;
     const show_model_query = !viewer_active and !show_auth_picker and !modal_active and !ctx.stream.active and ctx.model_query_active;
     const show_file_query = !viewer_active and !modal_active and !stream_suppresses_file_query and ctx.file_query_active and !show_model_query;
+    const show_history_query = !viewer_active and !show_auth_picker and !modal_active and ctx.history_query_active;
     const geometry = input_presentation.measureRawInputGeometry(
         ctx,
         shell.layout.cols,
@@ -369,8 +370,8 @@ fn buildFooterSurfaceProjection(
         show_file_query,
     );
     const show_slash_query = !show_auth_picker and geometry.show_slash_query;
-    const show_picker = show_auth_picker or show_model_query or show_file_query or show_slash_query;
-    const picker_items: []const []const u8 = if (show_model_query) ctx.model_completions else &.{};
+    const show_picker = show_auth_picker or show_model_query or show_file_query or show_history_query or show_slash_query;
+    const picker_items: []const []const u8 = if (show_model_query) ctx.model_completions else if (show_history_query) ctx.history_completions else &.{};
     const file_picker_items: []const file_index.SearchResult = if (show_file_query) ctx.file_completions else &.{};
     const picker_selection_index: usize = if (show_slash_query)
         ctx.input.picker.slash_completion_index
@@ -380,6 +381,8 @@ fn buildFooterSurfaceProjection(
         ctx.model_completion_index
     else if (show_file_query)
         ctx.file_completion_index
+    else if (show_history_query)
+        ctx.history_completion_index
     else
         0;
     const picker_window_start: usize = if (show_slash_query)
@@ -388,6 +391,8 @@ fn buildFooterSurfaceProjection(
         ctx.model_completion_window_start
     else if (show_file_query)
         ctx.file_completion_window_start
+    else if (show_history_query)
+        ctx.history_completion_window_start
     else
         0;
     const picker_loading: bool = if (show_model_query)
@@ -410,6 +415,8 @@ fn buildFooterSurfaceProjection(
         .model_stage
     else if (show_file_query)
         .file
+    else if (show_history_query)
+        .history
     else
         .model_stage;
     const sizing_request = if (approval) |value| value.request else null;
@@ -468,6 +475,8 @@ fn buildFooterSurfaceProjection(
         layout.row_count
     else if (show_slash_query and geometry.slash_completion_count == 0)
         picker_presentation.pickerRowCount(0)
+    else if (show_history_query and ctx.history_completions.len == 0)
+        picker_presentation.pickerRowCount(0)
     else if (show_picker)
         list_picker_rows
     else
@@ -507,7 +516,7 @@ fn buildFooterSurfaceProjection(
         .picker_failed = picker_failed,
         .slash_completion_count = geometry.slash_completion_count,
         .slash_menu_layout = slash_menu_layout,
-        .picker_start_col = geometry.picker_start_col,
+        .picker_start_col = if (show_history_query) 1 else geometry.picker_start_col,
         .file_approval_active = file_request != null,
         .allocated_rows = allocated_rows,
     };

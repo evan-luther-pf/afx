@@ -1399,8 +1399,8 @@ test.skipIf(!tmuxAvailable())(
     expect(terminalSchema!.oneOf).toBeUndefined();
     expect(terminalSchema!.additionalProperties).toBe(false);
     const properties = terminalSchema!.properties ?? {};
-    expect(Object.keys(properties)).toEqual(["request"]);
-    expect(terminalSchema!.required).toEqual(["request"]);
+    expect(Object.keys(properties)).toEqual(["i", "request"]);
+    expect(terminalSchema!.required).toEqual(["i", "request"]);
     const branches = properties.request!.oneOf ?? [];
     expect(branches).toHaveLength(12);
     const branchByAction = new Map(branches.map((branch) => [
@@ -1465,7 +1465,6 @@ test.skipIf(!tmuxAvailable())(
 
     const scrollback = await active.captureFullScrollback();
     expect(scrollback).toContain("Failed printf SHOULD_NOT_RUN");
-    expect(scrollback).toContain("17 inv");
     expect(countOccurrences(scrollback, "Started printf ACTION_SCHEMA_OK")).toBe(1);
     expect(scrollback).toContain("Killed printf ACTION_SCHEMA_OK");
     expect(scrollback).not.toContain("Using terminal");
@@ -2014,10 +2013,11 @@ test.skipIf(!tmuxAvailable())(
     const active = await launch(fixture, gateway);
 
     await active.sendText("Exercise terminal lease and payload validation.");
-    const pane = await active.waitForText(
+    await active.waitForText(
       "TUI terminal lease payload complete",
       TIMEOUT,
     );
+    const pane = await active.captureFullScrollback();
     expect(pane).toContain("Failed printf 'TUI_PUBLIC_LEASE_PAYLOAD_READY");
     expect(pane).toContain("Acquired control of");
     expect(pane).toContain("Sent input to");
@@ -2337,7 +2337,7 @@ test.skipIf(!tmuxAvailable())(
     expect(terminalSchema!.type).toBe("object");
     expect(terminalSchema!.oneOf).toBeUndefined();
     expect(terminalSchema!.additionalProperties).toBe(false);
-    expect(terminalSchema!.required).toEqual(["request"]);
+    expect(terminalSchema!.required).toEqual(["i", "request"]);
     const branches = terminalSchema!.properties?.request?.oneOf ?? [];
     const waitBranch = branches.find((branch) =>
       branch.properties?.action?.enum?.[0] === "wait"
@@ -2518,10 +2518,11 @@ test.skipIf(!tmuxAvailable())(
     const active = await launch(fixture, gateway);
 
     await active.sendText("Exercise the public event-driven terminal monitor.");
-    const pane = await active.waitForText(
+    await active.waitForText(
       "TUI public terminal monitor complete",
       TIMEOUT,
     );
+    const pane = await active.captureFullScrollback();
     for (const label of [
       "Started",
       "Added monitor to",

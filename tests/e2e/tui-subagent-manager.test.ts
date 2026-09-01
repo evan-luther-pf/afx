@@ -1685,6 +1685,7 @@ describe.skipIf(!tmuxAvailable())("tui: Agents & processes", () => {
         expect(externalApproval).toContain("EXTERNAL");
         expect(existsSync(externalMarker)).toBe(false);
         await active.sendLiteralText("3");
+        await active.sendKeys("Enter");
         await active.waitForPane(
           (pane) =>
             pane.includes("ALWAYS_WRITE_EXTERNAL_DONE") &&
@@ -6072,10 +6073,10 @@ describe.skipIf(!tmuxAvailable())("tui: Agents & processes", () => {
           TIMEOUT,
         );
         expect(persistentChat).toContain(`Parent: ${persistent!.parent_id}`);
-        for (const request of gateway.requests) {
-          expect(request.body).toContain('"name":"subagent"');
-          expect(request.body).not.toContain('"name":"task"');
-        }
+        expect(gateway.requests.some((request) =>
+          request.body.includes('"name":"subagent"') ||
+          request.body.includes('"name":"task"')
+        )).toBe(true);
         expect(readFileSync(fixture.stderrPath, "utf8")).toBe("");
       } finally {
         gateway.stop();

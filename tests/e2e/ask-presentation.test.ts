@@ -294,12 +294,13 @@ describe("afx ask presentation", () => {
     const terminalSchema = terminalTool?.inputSchema;
     expect(terminalSchema?.properties?.action?.enum).toEqual(["exec"]);
     expect(Object.keys(terminalSchema?.properties ?? {})).toEqual([
+      "i",
       "action",
       "command",
       "cwd",
       "profile",
     ]);
-    expect(terminalSchema?.required).toEqual(["action", "command", "cwd", "profile"]);
+    expect(terminalSchema?.required).toEqual(["i", "action", "command", "cwd", "profile"]);
     expect(terminalSchema?.additionalProperties).toBe(false);
     expect(terminalSchema?.properties?.command?.description).toBe(
       "Command to run. Set null when the selected action does not use this field.",

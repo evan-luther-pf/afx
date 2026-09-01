@@ -19,6 +19,13 @@ pub fn explicitThemeOverride() ?bool {
     return null;
 }
 
+pub fn explicitThemeName() ?[]const u8 {
+    const override = io_mod.getenv("FX_THEME") orelse return null;
+    const trimmed = std.mem.trim(u8, override, " \t\r\n");
+    if (trimmed.len > 0) return trimmed;
+    return null;
+}
+
 pub fn detectTheme(_: std.mem.Allocator, terminal_state: *const shell_runtime.TerminalState) Detection {
     if (explicitThemeOverride()) |light| return .{ .light = light, .rgb = null };
     if (comptime builtin.os.tag == .wasi) return .{ .light = false, .rgb = null };

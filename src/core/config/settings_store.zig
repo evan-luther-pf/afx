@@ -32,6 +32,8 @@ pub const StatuslineItem = enum {
     context,
     session,
     workspace,
+    cost,
+    git,
 };
 
 pub const StatuslineItemPatch = struct {
@@ -1183,7 +1185,7 @@ fn cleanupLegacyWorkspacePreferences(
             const legacy_field: ?UserPreferenceField = switch (item_patch.item) {
                 .context => .statusline_context,
                 .session => .statusline_session,
-                .workspace => null,
+                .workspace, .cost, .git => null,
             };
             if (legacy_field) |field| {
                 removeLegacyNestedLeaf(

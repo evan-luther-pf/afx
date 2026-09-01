@@ -480,6 +480,7 @@ async function runActiveToolPlacement(
     await capture(context, session, "active-tool-clipped");
 
     writeFileSync(activeToolReleasePath, "");
+    await session.resize(100, 52);
     await session.waitForPane(
       (pane) => pane.includes(TERMINAL_TOOL_MARKER),
       ACTIVE_TOOL_RESIZE_CAPTURE_TIMEOUT_MS,
@@ -568,7 +569,7 @@ async function runActiveToolPlacement(
       "active-tool-command-output-collapsed-again",
       (pane) =>
         pane.includes(TERMINAL_TOOL_MARKER) &&
-        commandMoreCount(pane) === null &&
+        commandMoreCount(pane) !== null &&
         !pane.includes("ACTIVE_TOOL_LINE_32"),
       10_000,
     );

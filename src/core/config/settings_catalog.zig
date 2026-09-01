@@ -28,6 +28,9 @@ pub const SettingId = enum {
     statusline_context,
     statusline_session,
     statusline_workspace,
+    statusline_cost,
+    statusline_git,
+    theme,
     slash_menu_categories,
     tool_display,
     display,
@@ -65,6 +68,9 @@ pub const Snapshot = struct {
     statusline_context: bool = false,
     statusline_session: bool = false,
     statusline_workspace: bool = false,
+    statusline_cost: bool = false,
+    statusline_git: bool = false,
+    theme: []const u8 = "auto",
     slash_menu_categories: bool = true,
     visual_tool_blocks: bool = true,
     fullscreen_display: bool = false,
@@ -97,8 +103,11 @@ pub const Snapshot = struct {
             .hub_wait => self.hub_wait,
             .statusline_session => onOff(self.statusline_session),
             .statusline_workspace => onOff(self.statusline_workspace),
+            .statusline_cost => onOff(self.statusline_cost),
+            .statusline_git => onOff(self.statusline_git),
             .slash_menu_categories => onOff(self.slash_menu_categories),
             .tool_display => if (self.visual_tool_blocks) "visual" else "compact",
+            .theme => self.theme,
             .display => if (self.fullscreen_display) "fullscreen" else "line-by-line",
             .startup_scrollback => onOff(self.startup_scrollback),
             .prompt_history => onOff(self.prompt_history),
@@ -152,6 +161,16 @@ const statusline_choices = [_]StatuslineChoice{
         .label = "Workspace",
         .description = "Show the workspace path and Git branch",
         .setting = .statusline_workspace,
+    },
+    .{
+        .label = "Cost",
+        .description = "Show cumulative session spend in USD",
+        .setting = .statusline_cost,
+    },
+    .{
+        .label = "Git",
+        .description = "Show Git branch and worktree state",
+        .setting = .statusline_git,
     },
 };
 
@@ -286,6 +305,7 @@ const specs = [_]Spec{
     .{ .id = .statusline_workspace, .category = .interface, .label = "Status line workspace", .description = "Show the workspace path and Git branch in the status line" },
     .{ .id = .slash_menu_categories, .category = .interface, .label = "Slash menu categories", .description = "Show categories and skill sources in slash-command results" },
     .{ .id = .tool_display, .category = .interface, .label = "Tool display", .description = "Choose OMP-style tool blocks or compact branches" },
+    .{ .id = .theme, .category = .interface, .label = "Theme", .description = "Choose auto, dark, light, or a custom color theme" },
     .{ .id = .display, .category = .interface, .label = "Display", .description = "Choose line-by-line flow or a bottom-pinned fullscreen composer" },
     .{ .id = .model, .category = .agent, .label = "Model", .description = "Choose the model used for new turns" },
     .{ .id = .effort, .category = .agent, .label = "Reasoning effort", .description = "Control how much reasoning the model applies" },
@@ -299,12 +319,13 @@ const specs = [_]Spec{
     .{ .id = .agent_spawns, .category = .agents, .label = "Spawns", .description = "false, *, or comma-separated agent names" },
     .{ .id = .spawn_depth, .category = .agents, .label = "Spawn depth", .description = "AFX_MAX_SPAWN_DEPTH; -1 means unlimited" },
     .{ .id = .hub_wait, .category = .agents, .label = "Hub wait default", .description = "Default wait timeout; each hub call may override it" },
-    .{ .id = .sound_level, .category = .notifications, .label = "Sound level", .description = "Choose off, on, or max sounds and terminal bells" },
+    .{ .id = .sound_level, .category = .notifications, .label = "Sound level", .description = "Choose off, on, or max sounds and desktop notifications" },
     .{ .id = .startup_scrollback, .category = .advanced, .label = "Startup scrollback", .description = "Restore terminal output when afx starts" },
     .{ .id = .prompt_history, .category = .advanced, .label = "Prompt history", .description = "Save accepted prompts and slash commands for composer history" },
 };
 
 const on_off_options = [_][]const u8{ "off", "on" };
+const theme_options = [_][]const u8{ "auto", "dark", "light" };
 const permission_options = [_][]const u8{ "ask", "auto", "yolo" };
 const sound_level_options = [_][]const u8{ "off", "on", "max" };
 const tool_display_options = [_][]const u8{ "compact", "visual" };
@@ -410,12 +431,15 @@ fn staticOptionsFor(id: SettingId) []const []const u8 {
         .statusline_context,
         .statusline_session,
         .statusline_workspace,
+        .statusline_cost,
+        .statusline_git,
         .slash_menu_categories,
         .startup_scrollback,
         .prompt_history,
         => &on_off_options,
-        .sound_level => &sound_level_options,
+        .theme => &theme_options,
         .tool_display => &tool_display_options,
+        .sound_level => &sound_level_options,
         .display => &display_options,
         .permission_mode => &permission_options,
     };
@@ -471,8 +495,8 @@ test "settings catalog projects grouped searchable preferences" {
         .sound_level = "on",
     };
 
-    try std.testing.expectEqual(@as(usize, 21), filteredCount(snapshot, .all, ""));
-    try std.testing.expectEqual(@as(usize, 6), filteredCount(snapshot, .interface, ""));
+    try std.testing.expectEqual(@as(usize, 22), filteredCount(snapshot, .all, ""));
+    try std.testing.expectEqual(@as(usize, 7), filteredCount(snapshot, .interface, ""));
     try std.testing.expectEqual(@as(usize, 4), filteredCount(snapshot, .agent, ""));
     try std.testing.expectEqual(@as(usize, 8), filteredCount(snapshot, .agents, ""));
     try std.testing.expectEqual(@as(usize, 1), filteredCount(snapshot, .notifications, ""));

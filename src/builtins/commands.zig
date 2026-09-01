@@ -421,6 +421,7 @@ pub const slash_specs = [_]SlashSpec{
     .{ .kind = .resume_session, .command = "/resume", .help_entry = "/resume", .completion_description = "resume a saved session", .presentation_category = .session },
     .{ .kind = .continue_recovery, .command = "/continue", .help_entry = "/continue", .completion_description = "continue a paused model response", .presentation_category = .session, .requires_prompt_credential = true },
     .{ .kind = .rename_session, .command = "/rename", .help_entry = "/rename <title>", .completion_description = "rename the current session", .presentation_category = .session, .has_args = true, .accepts_payload = true },
+    .{ .kind = .fork, .command = "/fork", .help_entry = "/fork", .completion_description = "fork current session into a new independent session", .presentation_category = .session },
     .{ .kind = .login, .command = "/login", .help_entry = "/login", .completion_description = "choose Vercel, Codex, Grok, or Google sign-in", .presentation_category = .account },
     .{ .kind = .logout, .command = "/logout", .help_entry = "/logout [vercel|codex|grok|google|gemini]", .completion_description = "sign out of a provider session", .presentation_category = .account, .has_args = true, .accepts_payload = true },
     .{ .kind = .providers, .command = "/providers", .help_entry = "/providers", .completion_description = "choose a model provider and manage its access", .presentation_category = .account },
@@ -442,6 +443,8 @@ pub const slash_specs = [_]SlashSpec{
     .{ .kind = .skills, .command = "/skills", .help_entry = "/skills [list|add|install|show|create|remove|path] [name|url|path] ($ opens skill search)", .completion_description = "browse and manage skills", .presentation_category = .extensions, .has_args = true, .accepts_payload = true },
     .{ .kind = .agents, .command = "/agents", .help_entry = "/agents", .completion_description = "list bundled and custom agent profiles", .presentation_category = .agents },
     .{ .kind = .copy, .command = "/copy", .help_entry = "/copy", .completion_description = "copy the last assistant response", .presentation_category = .session },
+    .{ .kind = .dump, .command = "/dump", .help_entry = "/dump", .completion_description = "copy model-facing context to clipboard", .presentation_category = .session },
+    .{ .kind = .export_session, .command = "/export", .help_entry = "/export [path]", .completion_description = "export the session as an HTML file", .presentation_category = .session, .has_args = true, .accepts_payload = true },
     .{ .kind = .feedback, .command = "/feedback", .help_entry = "/feedback", .completion_description = "open the " ++ product.name ++ " feedback form", .presentation_category = .product, .show_in_welcome = true },
     .{ .kind = .trace, .command = "/trace", .help_entry = "/trace", .completion_description = "copy a private diagnostic trace", .presentation_category = .product },
     .{ .kind = .compact, .command = "/compact", .help_entry = "/compact", .completion_description = "compact older conversation turns", .presentation_category = .session },
@@ -453,9 +456,10 @@ pub const slash_specs = [_]SlashSpec{
     .{ .kind = .credits, .command = "/credits", .aliases = &.{"/balance"}, .help_entry = "/credits (/balance)", .completion_description = "show gateway credits balance", .presentation_category = .account, .requires_prompt_credential = true },
     .{ .kind = .paste, .command = "/paste", .help_entry = "/paste", .completion_description = "attach an image from the clipboard when supported", .presentation_category = .media },
     .{ .kind = .fast, .command = "/fast", .help_entry = "/fast", .completion_description = "toggle Fast mode when supported", .presentation_category = .model },
-    .{ .kind = .statusline, .command = "/statusline", .help_entry = "/statusline [context|session|workspace]", .completion_description = "toggle status line segments", .presentation_category = .appearance, .has_args = true, .accepts_payload = true },
-    .{ .kind = .notifications, .command = "/sound", .help_entry = "/sound [on|off|max]", .completion_description = "toggle sounds and terminal bells", .presentation_category = .appearance, .has_args = true, .accepts_payload = true },
+    .{ .kind = .statusline, .command = "/statusline", .help_entry = "/statusline [context|session|workspace|cost|git]", .completion_description = "toggle status line segments", .presentation_category = .appearance, .has_args = true, .accepts_payload = true },
+    .{ .kind = .notifications, .command = "/sound", .aliases = &.{"/notifications"}, .help_entry = "/sound [on|off|max]", .completion_description = "toggle sounds, bells, and notifications", .presentation_category = .appearance, .has_args = true, .accepts_payload = true },
     .{ .kind = .workspace, .command = "/workspace", .help_entry = "/workspace [list|add PATH|remove PATH|clear]", .completion_description = "manage additional workspace directories", .presentation_category = .workspace, .show_in_welcome = true, .has_args = true, .accepts_payload = true },
+    .{ .kind = .hotkeys, .command = "/hotkeys", .help_entry = "/hotkeys", .completion_description = "list active keyboard shortcuts and keybindings", .presentation_category = .general, .show_in_welcome = true },
     .{ .kind = .version, .command = "/version", .help_entry = "/version", .completion_description = "show the " ++ product.name ++ " version", .presentation_category = .general },
     .{ .kind = .quit, .command = "/quit", .aliases = &.{"/exit"}, .help_entry = "/quit", .completion_description = "exit the interactive shell", .presentation_category = .general, .show_in_welcome = true },
 };
@@ -526,6 +530,7 @@ test "built-in slash commands register exact active order" {
         "/resume",
         "/continue",
         "/rename",
+        "/fork",
         "/login",
         "/logout",
         "/providers",
@@ -547,6 +552,8 @@ test "built-in slash commands register exact active order" {
         "/skills",
         "/agents",
         "/copy",
+        "/dump",
+        "/export",
         "/feedback",
         "/trace",
         "/compact",
@@ -561,10 +568,10 @@ test "built-in slash commands register exact active order" {
         "/statusline",
         "/sound",
         "/workspace",
+        "/hotkeys",
         "/version",
         "/quit",
     };
-
     try std.testing.expectEqual(expected_commands.len, slash_specs.len);
     for (expected_commands, slash_specs) |expected, spec| {
         try std.testing.expectEqualStrings(expected, spec.command);
@@ -616,7 +623,7 @@ test "built-in statusline help and completion include workspace" {
     const help = try renderSlashHelp(std.testing.allocator);
     defer std.testing.allocator.free(help);
     try std.testing.expect(
-        std.mem.find(u8, help, "/statusline [context|session|workspace]") != null,
+        std.mem.find(u8, help, "/statusline [context|session|workspace|cost|git]") != null,
     );
 
     try std.testing.expectEqualStrings(

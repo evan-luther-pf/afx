@@ -93,6 +93,7 @@ pub const Action = union(enum) {
     toggle_full_transcript,
     toggle_permission_mode,
     open_all_sessions,
+    external_editor,
     insert_newline,
     paste_start,
     paste_end,
