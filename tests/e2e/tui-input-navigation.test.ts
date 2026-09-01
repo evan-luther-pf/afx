@@ -1820,8 +1820,8 @@ tmuxTest(
     await typeLiteral(active, "unsubmitted draft");
     await active.waitForPane((pane) => pane.includes("unsubmitted draft"), READY_TIMEOUT);
 
-    // Press Ctrl+R (C-r) to open history search
-    await active.sendKeys("C-r");
+    // Press Ctrl+R (0x12) to open history search
+    await active.sendHexBytes(["12"]);
     await active.waitForPane((pane) => pane.includes("────────────────────────────────────────────────────────────────────────────────"), READY_TIMEOUT);
 
     // Filter for "first" and wait for query in composer
@@ -1836,7 +1836,7 @@ tmuxTest(
     );
 
     // Open history search again, type query, and cancel with Escape to restore draft
-    await active.sendKeys("C-r");
+    await active.sendHexBytes(["12"]);
     await active.waitForPane((pane) => pane.includes("────────────────────────────────────────────────────────────────────────────────"), READY_TIMEOUT);
     await typeLiteral(active, "something_else");
     await active.waitForPane((pane) => pane.includes("┃ something_else"), READY_TIMEOUT);
