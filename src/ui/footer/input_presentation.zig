@@ -933,21 +933,10 @@ fn appendMonochromeShimmerUnit(
     unit_offset: usize,
     phase: i16,
 ) !void {
-    const offset: i16 = @intCast(@min(unit_offset, std.math.maxInt(i16)));
-    const distance = @abs(offset - phase);
-    const color: u8 = if (ui_render.is_light)
-        if (distance == 0) 235 else if (distance == 1) 239 else if (distance == 2) 243 else 247
-    else if (distance == 0)
-        255
-    else if (distance == 1)
-        252
-    else if (distance == 2)
-        249
-    else
-        245;
-    var style_buf: [20]u8 = undefined;
-    const style = try std.fmt.bufPrint(&style_buf, "\x1b[38;5;{d}m", .{color});
-    try row.appendSlice(alloc, style);
+    _ = unit_offset;
+    _ = phase;
+    // ponytail: render magic keywords with static accent + bold; no animation cycle in v1.
+    try row.appendSlice(alloc, ui_render.system_notice_label_style);
     try row.appendSlice(alloc, bytes);
     try row.appendSlice(alloc, ui_render.reset_style);
 }

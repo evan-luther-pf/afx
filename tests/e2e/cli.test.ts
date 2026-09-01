@@ -5100,4 +5100,66 @@ describe("cli: workspace access", () => {
     },
     30_000,
   );
+
+  test(
+    "magic keywords inject hidden turn guidance into outgoing gateway requests",
+    async () => {
+      const root = realpathSync(mkdtempSync(join(tmpdir(), "afx-magic-keywords-")));
+      const home = join(root, "home");
+      const workspace = join(root, "workspace");
+      mkdirSync(join(home, ".afx"), { recursive: true });
+      mkdirSync(workspace, { recursive: true });
+
+      const gateway = startFakeGateway([
+        fakeGatewayFinalText("ultrathink completed"),
+        fakeGatewayFinalText("normal completed"),
+        fakeGatewayFinalText("orchestrate completed"),
+      ]);
+
+      try {
+        const baseEnv = {
+          HOME: home,
+          AI_GATEWAY_API_KEY: "fake-key",
+          FX_GATEWAY_CHAT_URL: gateway.chatUrl,
+          FX_GATEWAY_MODELS_URL: gateway.modelsUrl,
+        };
+
+        // 1. Prompt with 'ultrathink' keyword
+        const ultrathinkResult = await runFx(
+          ["ask", "ultrathink about this task", "--json"],
+          { cwd: workspace, env: baseEnv },
+        );
+        expect(ultrathinkResult.code).toBe(0);
+        expect(gateway.requests.length).toBe(1);
+        const req1 = gateway.requests[0].body;
+        expect(req1).toContain("[Turn guidance]");
+        expect(req1).toContain("The user requested ultrathink for this turn.");
+
+        // 2. Regular prompt without magic keywords
+        const normalResult = await runFx(
+          ["ask", "regular prompt without keywords", "--json"],
+          { cwd: workspace, env: baseEnv },
+        );
+        expect(normalResult.code).toBe(0);
+        expect(gateway.requests.length).toBe(2);
+        const req2 = gateway.requests[1].body;
+        expect(req2).not.toContain("[Turn guidance]");
+
+        // 3. Prompt with 'orchestrate' keyword
+        const orchestrateResult = await runFx(
+          ["ask", "orchestrate the full migration", "--json"],
+          { cwd: workspace, env: baseEnv },
+        );
+        expect(orchestrateResult.code).toBe(0);
+        expect(gateway.requests.length).toBe(3);
+        const req3 = gateway.requests[2].body;
+        expect(req3).toContain("[Turn guidance]");
+        expect(req3).toContain("The user requested orchestration for this turn.");
+      } finally {
+        gateway.stop();
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+    30_000,
+  );
 });

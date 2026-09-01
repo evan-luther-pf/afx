@@ -157,6 +157,28 @@ Run `/hotkeys` to see every active shortcut and its binding status. Customize ke
 
 Assigning an empty array `[]` disables a shortcut.
 
+## Magic keywords
+
+afx supports magic keywords in prompt text. Including a keyword injects a hidden, per-turn instruction into the model request while preserving the raw keyword text in the visible user message and session history. Magic keywords are always enabled in v1 without a separate settings toggle, and recognized keywords render highlighted in bold accent color in the composer.
+
+### Supported keywords
+
+- `ultrathink`: Injects a hidden turn instruction directing the model to reason carefully step-by-step through constraints, failure modes, and verification before acting.
+- `orchestrate`: Injects a hidden turn instruction directing the model to map the full task scope, decompose independent work into parallel subagents via `task`, and verify each phase before advancing.
+
+### Matching rules
+
+- Exact lowercase spelling only (`ultrathink`, `orchestrate`). Uppercase or title-case variations are ignored.
+- Must appear as a standalone word. Sentence punctuation and quotes adjacent to the word (such as commas, quotes, exclamation marks, or parentheses) are allowed.
+- Adjacency to letters, digits, underscores, slashes, backslashes, hyphens, or dots does not match (for example, `orchestrated`, `orchestrate.ts`, `foo/ultrathink`, and `ultrathink-mode` are not treated as keywords).
+- Occurrences inside backtick code spans (`` `ultrathink` ``) and fenced code blocks are ignored.
+- Multiple distinct keywords in the same prompt inject their respective notices once. Repeated occurrences of the same keyword inject the notice once.
+
+### Examples
+
+- `ultrathink before refactoring the auth session tokens`: highlights `ultrathink` and injects careful step-by-step reasoning guidance for the turn.
+- `orchestrate the full migration across core packages`: highlights `orchestrate` and injects parallel decomposition guidance for the turn.
+
 ## Permissions
 
 afx starts in `auto` mode. Routine development work can proceed, while unresolved sensitive actions receive a bounded review. Use `ask` when you want approval prompts for sensitive actions or `yolo` only in an environment you already trust.
