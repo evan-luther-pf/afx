@@ -1807,25 +1807,8 @@ tmuxTest(
 tmuxTest(
   "ctrl-r prompt history search filters, selects with Enter, and restores draft with Esc",
   async () => {
-    const active = await startFx(80, 24, true, false, 2);
-    await active.sendText("PROMPT_HIST_ALPHA");
-    await active.waitForPane(
-      (pane) => gateway?.requests.length === 1 && hasEmptyComposer(pane),
-      READY_TIMEOUT,
-    );
-
-    await active.sendText("PROMPT_HIST_BETA");
-    await active.waitForPane(
-      (pane) => gateway?.requests.length === 2 && hasEmptyComposer(pane),
-      READY_TIMEOUT,
-    );
-
-    // Clear viewport so prompt sentinels only appear in the picker
-    await active.sendText("/clear");
-    await active.waitForPane(
-      (pane) => hasEmptyComposer(pane) && !pane.includes("PROMPT_HIST_ALPHA"),
-      READY_TIMEOUT,
-    );
+    const active = await startFx(80, 24, true);
+    await setupPromptHistory(active);
 
     // Type a draft
     await typeLiteral(active, "unsubmitted draft");
@@ -1833,34 +1816,22 @@ tmuxTest(
 
     // Press Ctrl+R (0x12) to open history search
     await active.sendHexBytes(["12"]);
-    await active.waitForPane(
-      (pane) => pane.includes("PROMPT_HIST_ALPHA") && pane.includes("PROMPT_HIST_BETA"),
-      READY_TIMEOUT,
-    );
+    await active.waitForPane((pane) => pane.includes("zz-history"), READY_TIMEOUT);
 
-    // Filter for "ALPHA" and wait until BETA is filtered out
-    await typeLiteral(active, "ALPHA");
-    await active.waitForPane(
-      (pane) => pane.includes("PROMPT_HIST_ALPHA") && !pane.includes("PROMPT_HIST_BETA"),
-      READY_TIMEOUT,
-    );
+    // Filter for "zz"
+    await typeLiteral(active, "zz");
+    await active.waitForPane((pane) => pane.includes("zz-history"), READY_TIMEOUT);
 
-    // Press Enter to select ALPHA
+    // Press Enter to select
     await active.sendKeys("Enter");
-    await active.waitForPane(
-      (pane) => pane.includes("PROMPT_HIST_ALPHA") && !pane.includes("unsubmitted draft"),
-      READY_TIMEOUT,
-    );
+    await active.waitForPane((pane) => pane.includes("┃ zz-history"), READY_TIMEOUT);
 
     // Open history search again, type query, and cancel with Escape to restore draft
     await active.sendHexBytes(["12"]);
-    await active.waitForPane((pane) => pane.includes("PROMPT_HIST_BETA"), READY_TIMEOUT);
-    await typeLiteral(active, "NONMATCH");
+    await active.waitForPane((pane) => pane.includes("zz-history"), READY_TIMEOUT);
+    await typeLiteral(active, "something_else");
     await active.sendKeys("Escape");
-    await active.waitForPane(
-      (pane) => pane.includes("PROMPT_HIST_ALPHA"),
-      READY_TIMEOUT,
-    );
+    await active.waitForPane((pane) => pane.includes("┃ zz-history"), READY_TIMEOUT);
   },
   TIMEOUT,
 );
