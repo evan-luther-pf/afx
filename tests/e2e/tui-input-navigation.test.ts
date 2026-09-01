@@ -1808,11 +1808,11 @@ tmuxTest(
   "ctrl-r prompt history search filters, selects with Enter, and restores draft with Esc",
   async () => {
     const active = await startFx(80, 24, true, false, 2);
-    await active.sendText("echo first prompt");
+    await active.sendText("FIRST_QUERY_ALPHA");
     await active.waitForText("history prompt complete", READY_TIMEOUT);
     await active.waitForComposer(READY_TIMEOUT);
 
-    await active.sendText("echo second prompt");
+    await active.sendText("SECOND_QUERY_BETA");
     await active.waitForText("history prompt complete", READY_TIMEOUT);
     await active.waitForComposer(READY_TIMEOUT);
 
@@ -1822,27 +1822,29 @@ tmuxTest(
 
     // Press Ctrl+R (0x12) to open history search
     await active.sendHexBytes(["12"]);
-    await active.waitForPane((pane) => pane.includes("────────────────────────────────────────────────────────────────────────────────"), READY_TIMEOUT);
+    await active.waitForPane(
+      (pane) => pane.includes("FIRST_QUERY_ALPHA") && pane.includes("SECOND_QUERY_BETA") && pane.includes("───"),
+      READY_TIMEOUT,
+    );
 
-    // Filter for "first" and wait for query in composer
-    await typeLiteral(active, "first");
-    await active.waitForPane((pane) => pane.includes("┃ first"), READY_TIMEOUT);
+    // Filter for "FIRST"
+    await typeLiteral(active, "FIRST");
+    await active.waitForPane((pane) => pane.includes("FIRST_QUERY_ALPHA") && pane.includes("───"), READY_TIMEOUT);
 
     // Press Enter to select
     await active.sendKeys("Enter");
     await active.waitForPane(
-      (pane) => pane.includes("┃ echo first prompt") && !pane.includes("────────────────────────────────────────────────────────────────────────────────"),
+      (pane) => pane.includes("┃ FIRST_QUERY_ALPHA") && !pane.includes("───"),
       READY_TIMEOUT,
     );
 
     // Open history search again, type query, and cancel with Escape to restore draft
     await active.sendHexBytes(["12"]);
-    await active.waitForPane((pane) => pane.includes("────────────────────────────────────────────────────────────────────────────────"), READY_TIMEOUT);
-    await typeLiteral(active, "something_else");
-    await active.waitForPane((pane) => pane.includes("┃ something_else"), READY_TIMEOUT);
+    await active.waitForPane((pane) => pane.includes("───"), READY_TIMEOUT);
+    await typeLiteral(active, "NOMATCH");
     await active.sendKeys("Escape");
     await active.waitForPane(
-      (pane) => pane.includes("┃ echo first prompt") && !pane.includes("────────────────────────────────────────────────────────────────────────────────"),
+      (pane) => pane.includes("┃ FIRST_QUERY_ALPHA") && !pane.includes("───"),
       READY_TIMEOUT,
     );
   },
