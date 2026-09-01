@@ -793,6 +793,8 @@ test "compact status line menu renders toggled items without choose copy" {
             .statusline_context = false,
             .statusline_session = true,
             .statusline_workspace = false,
+            .statusline_cost = true,
+            .statusline_git = false,
         },
     } };
 
@@ -822,6 +824,16 @@ test "compact status line menu renders toggled items without choose copy" {
     defer session.deinit(std.testing.allocator);
     try std.testing.expect(std.mem.find(u8, session.items, "Session") != null);
     try std.testing.expect(std.mem.find(u8, session.items, "on") != null);
+
+    var cost = try composeCompactCommandMenuRow(std.testing.allocator, projection, 5, rows, 80);
+    defer cost.deinit(std.testing.allocator);
+    try std.testing.expect(std.mem.find(u8, cost.items, "Cost") != null);
+    try std.testing.expect(std.mem.find(u8, cost.items, "on") != null);
+
+    var git = try composeCompactCommandMenuRow(std.testing.allocator, projection, 6, rows, 80);
+    defer git.deinit(std.testing.allocator);
+    try std.testing.expect(std.mem.find(u8, git.items, "Git") != null);
+    try std.testing.expect(std.mem.find(u8, git.items, "off") != null);
 }
 
 test "usage menu renders token-first totals and selectable model rows" {

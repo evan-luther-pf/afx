@@ -1,5 +1,6 @@
 const std = @import("std");
 const editor_state = @import("editor_state.zig");
+const composer_history = @import("composer_history.zig");
 const text_utils = @import("../shared/text_utils.zig");
 
 const Allocator = std.mem.Allocator;
@@ -15,6 +16,16 @@ pub const InlinePickerKind = enum {
     model,
     file,
     skill,
+    history,
+};
+
+pub const HistorySearchDraft = struct {
+    text: std.ArrayList(u8) = .empty,
+    cursor: usize = 0,
+
+    pub fn deinit(self: *HistorySearchDraft, alloc: Allocator) void {
+        self.text.deinit(alloc);
+    }
 };
 
 pub const model_picker_fast_options = [_][]const u8{ "normal", "fast" };
@@ -68,9 +79,14 @@ pub const State = struct {
     file_completion_index: usize = 0,
     file_completion_window_start: usize = 0,
     file_picker_episode_seen: bool = false,
+    history_search_active: bool = false,
+    history_selection_index: usize = 0,
+    history_window_start: usize = 0,
+    history_saved_draft: ?HistorySearchDraft = null,
 
     pub fn deinit(self: *State, alloc: Allocator) void {
         self.model_picker_pending_model.deinit(alloc);
+        self.clearHistorySearch(alloc);
         self.* = .{};
     }
 
@@ -91,6 +107,10 @@ pub const State = struct {
     pub fn reconcileInlinePickerAfterEdit(self: *State, editor: *const editor_state.State) void {
         self.slash_completion_index = 0;
         self.slash_completion_window_start = 0;
+        if (self.history_search_active) {
+            self.history_selection_index = 0;
+            self.history_window_start = 0;
+        }
         const dismissed = self.dismissed_inline_picker orelse return;
         if (self.inlinePickerTriggerKind(editor) != dismissed) self.dismissed_inline_picker = null;
     }
@@ -233,7 +253,63 @@ pub const State = struct {
     pub fn selectedModelPickerFast(self: *const State) bool {
         return self.model_picker_fast_index % model_picker_fast_options.len == 1;
     }
+
+    pub fn beginHistorySearch(
+        self: *State,
+        alloc: Allocator,
+        current_input: []const u8,
+        cursor: usize,
+    ) !void {
+        self.clearHistorySearch(alloc);
+        var draft = HistorySearchDraft{
+            .cursor = cursor,
+        };
+        try draft.text.appendSlice(alloc, current_input);
+        self.history_saved_draft = draft;
+        self.history_search_active = true;
+        self.history_selection_index = 0;
+        self.history_window_start = 0;
+    }
+
+    pub fn clearHistorySearch(self: *State, alloc: Allocator) void {
+        self.history_search_active = false;
+        self.history_selection_index = 0;
+        self.history_window_start = 0;
+        if (self.history_saved_draft) |*draft| {
+            draft.deinit(alloc);
+            self.history_saved_draft = null;
+        }
+    }
 };
+pub fn filterHistoryEntries(
+    entries: []const composer_history.Snapshot,
+    query: []const u8,
+    out: [][]const u8,
+) usize {
+    var count: usize = 0;
+    if (entries.len == 0) return 0;
+    var i: usize = entries.len;
+    while (i > 0) {
+        i -= 1;
+        const text = entries[i].text.items;
+        if (text.len == 0) continue;
+        if (query.len > 0 and !text_utils.containsIgnoreCase(text, query)) continue;
+
+        var duplicate = false;
+        for (out[0..count]) |seen| {
+            if (std.ascii.eqlIgnoreCase(seen, text)) {
+                duplicate = true;
+                break;
+            }
+        }
+        if (duplicate) continue;
+
+        out[count] = text;
+        count += 1;
+        if (count >= out.len) break;
+    }
+    return count;
+}
 
 pub fn isBareModelCommandAtCursor(editor: *const editor_state.State) bool {
     if (editor.cursor != editor.input.items.len) return false;
@@ -521,4 +597,38 @@ test "completion label filtering is trimmed and case insensitive" {
     try std.testing.expectEqual(@as(usize, 2), count);
     try std.testing.expectEqualStrings("High", matches[0]);
     try std.testing.expectEqualStrings("xhigh", matches[1]);
+}
+
+test "history search draft capture, restore, and entry filtering" {
+    const alloc = std.testing.allocator;
+    var state: State = .{};
+    defer state.deinit(alloc);
+
+    try state.beginHistorySearch(alloc, "my work in progress", 5);
+    try std.testing.expect(state.history_search_active);
+    try std.testing.expectEqualStrings("my work in progress", state.history_saved_draft.?.text.items);
+    try std.testing.expectEqual(@as(usize, 5), state.history_saved_draft.?.cursor);
+
+    var history: composer_history.State = .{};
+    defer history.deinit(alloc);
+
+    try history.installTextEntries(alloc, &.{ "first commit", "second test", "FIRST commit", "third deploy" });
+
+    var out_buf: [8][]const u8 = undefined;
+
+    // Empty query returns all unique most recent first
+    const empty_count = filterHistoryEntries(history.entries.items, "", &out_buf);
+    try std.testing.expectEqual(@as(usize, 3), empty_count);
+    try std.testing.expectEqualStrings("third deploy", out_buf[0]);
+    try std.testing.expectEqualStrings("FIRST commit", out_buf[1]);
+    try std.testing.expectEqualStrings("second test", out_buf[2]);
+
+    // Substring case-insensitive query
+    const commit_count = filterHistoryEntries(history.entries.items, "commit", &out_buf);
+    try std.testing.expectEqual(@as(usize, 1), commit_count);
+    try std.testing.expectEqualStrings("FIRST commit", out_buf[0]);
+
+    state.clearHistorySearch(alloc);
+    try std.testing.expect(!state.history_search_active);
+    try std.testing.expect(state.history_saved_draft == null);
 }

@@ -36,6 +36,8 @@ const skill_runtime = @import("../skills/skill_runtime.zig");
 const text_utils = @import("../shared/text_utils.zig");
 const session_commands = @import("../session/session_commands.zig");
 const usage_recovery = @import("../session/usage_recovery.zig");
+const ui_render = @import("../../ui/render.zig");
+const keybindings = @import("../input/keybindings.zig");
 const usage_report = @import("../session/usage_report.zig");
 const types = @import("../shared/types.zig");
 const assistant_presentation = @import("../agent/assistant_presentation.zig");
@@ -48,6 +50,10 @@ const test_builtin_skills = if (@import("builtin").is_test)
 else
     struct {};
 const TranscriptEntry = transcript_runtime.TranscriptEntry;
+const model_dump = @import("../output/model_dump.zig");
+const builtin_context = @import("../../builtins/context.zig");
+const session_mod = @import("../session/session.zig");
+const session_export = @import("../output/session_export.zig");
 
 fn finish_trace_notice(app: anytype, entry_id: u32, tone: types.NoticeTone, body: []const u8) !void {
     const notice: types.SemanticNotice = .{
@@ -341,6 +347,8 @@ pub fn Handlers(comptime App: type) type {
                 .handle_skills = commandHandleSkills,
                 .show_agents = commandShowAgents,
                 .copy_last = commandCopyLast,
+                .dump_context = commandDump,
+                .export_session = commandExport,
                 .submit_feedback = commandSubmitFeedback,
                 .create_trace = commandCreateTrace,
                 .compact_history = commandCompactHistory,
@@ -354,8 +362,10 @@ pub fn Handlers(comptime App: type) type {
                 .toggle_fast = commandToggleFast,
                 .handle_statusline = commandHandleStatusline,
                 .rename_session = commandRenameSession,
+                .fork_session = commandFork,
                 .handle_notifications = commandHandleNotifications,
                 .handle_workspace = commandHandleWorkspace,
+                .hotkeys = commandHotkeys,
                 .show_version = commandShowVersion,
                 .unknown = commandUnknown,
             };
@@ -548,6 +558,67 @@ pub fn Handlers(comptime App: type) type {
         fn commandRenameSession(ctx: *anyopaque, rest: []const u8) !void {
             const app: *App = @ptrCast(@alignCast(ctx));
             try handleRenameCommand(app, rest);
+        }
+
+        fn commandFork(ctx: *anyopaque) !void {
+            const app: *App = @ptrCast(@alignCast(ctx));
+            if (comptime @hasField(App, "stream")) {
+                if (app.stream.active) {
+                    try app.writeDomainNotice(.{
+                        .topic = "session",
+                        .tone = .@"error",
+                        .body = "Wait for in-flight turn to finish before forking.",
+                    }, true);
+                    return;
+                }
+            }
+
+            if (comptime @hasField(App, "session_persistence")) {
+                const new_id = app_session_runtime.Runtime(App).forkActiveSession(app) catch |err| {
+                    debug_trace.logf("session", "session fork failed err={s}", .{@errorName(err)});
+                    const message = switch (err) {
+                        error.NoActiveSession => "No active session to fork.",
+                        else => "Failed to fork session.",
+                    };
+                    try app.writeDomainNotice(.{
+                        .topic = "session",
+                        .tone = if (err == error.NoActiveSession) .neutral else .@"error",
+                        .body = message,
+                    }, true);
+                    return;
+                };
+                defer app.alloc.free(new_id);
+
+                // Switch live session to the new id via resumeRequestedSession
+                app.requested_resume = .{ .id = try app.alloc.dupe(u8, new_id) };
+                app_session_runtime.Runtime(App).resumeRequestedSession(app) catch |err| {
+                    debug_trace.logf("session", "session switch after fork failed new_id={s} err={s}", .{ new_id, @errorName(err) });
+                    try app.writeDomainNotice(.{
+                        .topic = "session",
+                        .tone = .@"error",
+                        .body = "Forked session created but failed to switch.",
+                    }, true);
+                    return;
+                };
+
+                const notice_body = try std.fmt.allocPrint(
+                    app.alloc,
+                    "Forked to session {s} (no background processes or subagents carried over).",
+                    .{new_id},
+                );
+                defer app.alloc.free(notice_body);
+                try app.writeDomainNotice(.{
+                    .topic = "session",
+                    .tone = .neutral,
+                    .body = notice_body,
+                }, true);
+            } else {
+                try app.writeDomainNotice(.{
+                    .topic = "session",
+                    .tone = .neutral,
+                    .body = "No active session to fork.",
+                }, true);
+            }
         }
 
         fn commandShowHelp(ctx: *anyopaque) !void {
@@ -1586,6 +1657,228 @@ pub fn Handlers(comptime App: type) type {
             }, true);
         }
 
+        fn commandDump(ctx: *anyopaque) !void {
+            const app: *App = @ptrCast(@alignCast(ctx));
+            if (comptime @hasField(App, "session")) {
+                if (app.session.history.items.len == 0) {
+                    try app.writeDomainNotice(.{
+                        .topic = "dump",
+                        .tone = .neutral,
+                        .body = "No messages to dump yet.",
+                    }, true);
+                    return;
+                }
+
+                var arena_state = std.heap.ArenaAllocator.init(std.heap.c_allocator);
+                defer arena_state.deinit();
+                const arena = arena_state.allocator();
+
+                var messages: std.ArrayList(types.ChatMessage) = .empty;
+                try session_mod.appendHistoryChatMessages(arena, &messages, app.session.history.items);
+
+                var tools: []const model_dump.DumpTool = &.{};
+                if (comptime @hasDecl(App, "toolAdvertisementSet")) {
+                    const advertised_tools = app.toolAdvertisementSet();
+                    var tool_list: std.ArrayList(model_dump.DumpTool) = .empty;
+                    for (advertised_tools.order) |name| {
+                        if (advertised_tools.registry.lookup(name)) |spec| {
+                            try tool_list.append(arena, .{
+                                .name = spec.name,
+                                .description = spec.description,
+                            });
+                        }
+                    }
+                    tools = tool_list.items;
+                }
+
+                const model = if (comptime @hasDecl(App, "activeModel"))
+                    app.activeModel()
+                else if (comptime @hasField(App, "model"))
+                    app.model
+                else
+                    "unknown";
+                const effort_str = if (comptime @hasField(App, "effort"))
+                    app.effort.displayLabel()
+                else
+                    "default";
+
+                const payload = model_dump.DumpPayload{
+                    .system_prompt = builtin_context.gateway_system_prompt,
+                    .model = model,
+                    .effort = effort_str,
+                    .tools = tools,
+                    .messages = messages.items,
+                };
+
+                const dump_text = try model_dump.formatModelDumpText(arena, payload);
+                const dump_json = try model_dump.formatModelDumpJson(arena, payload);
+
+                const session_id = if (comptime @hasDecl(App, "activeSessionId"))
+                    app.activeSessionId() orelse "active"
+                else if (comptime @hasField(App, "session_persistence"))
+                    app_session_runtime.Runtime(App).activeSessionId(app) orelse "active"
+                else
+                    "active";
+
+                const sidecar_path = model_dump.writeSidecarFile(arena, session_id, dump_json);
+
+                const copied = if (comptime @hasDecl(App, "clipboard"))
+                    app.clipboard().copy(dump_text) catch false
+                else
+                    false;
+
+                if (sidecar_path) |path| {
+                    if (copied) {
+                        const notice = try std.fmt.allocPrint(arena, "Copied model context to clipboard. Sidecar: {s}", .{path});
+                        try app.writeDomainNotice(.{
+                            .topic = "dump",
+                            .tone = .neutral,
+                            .body = notice,
+                        }, true);
+                    } else {
+                        const notice = try std.fmt.allocPrint(arena, "Failed to copy to clipboard. Sidecar: {s}", .{path});
+                        try app.writeDomainNotice(.{
+                            .topic = "dump",
+                            .tone = .@"error",
+                            .body = notice,
+                        }, true);
+                    }
+                } else {
+                    if (copied) {
+                        try app.writeDomainNotice(.{
+                            .topic = "dump",
+                            .tone = .neutral,
+                            .body = "Copied model context to clipboard.",
+                        }, true);
+                    } else {
+                        try app.writeDomainNotice(.{
+                            .topic = "dump",
+                            .tone = .@"error",
+                            .body = "Failed to copy to clipboard.",
+                        }, true);
+                    }
+                }
+            } else {
+                try app.writeDomainNotice(.{
+                    .topic = "dump",
+                    .tone = .neutral,
+                    .body = "No messages to dump yet.",
+                }, true);
+            }
+        }
+
+        fn commandExport(ctx: *anyopaque, rest: []const u8) !void {
+            const app: *App = @ptrCast(@alignCast(ctx));
+            const trimmed_arg = std.mem.trim(u8, rest, " \t\r\n");
+
+            // Reject --copy / -c with pointer to /dump
+            if (std.mem.eql(u8, trimmed_arg, "--copy") or
+                std.mem.eql(u8, trimmed_arg, "-c") or
+                std.mem.startsWith(u8, trimmed_arg, "--copy ") or
+                std.mem.startsWith(u8, trimmed_arg, "-c "))
+            {
+                try app.writeDomainNotice(.{
+                    .topic = "export",
+                    .tone = .neutral,
+                    .body = "To copy model context to clipboard, use /dump.",
+                }, true);
+                return;
+            }
+
+            if (comptime @hasField(App, "session")) {
+                if (app.session.history.items.len == 0) {
+                    try app.writeDomainNotice(.{
+                        .topic = "export",
+                        .tone = .neutral,
+                        .body = "No messages to export yet.",
+                    }, true);
+                    return;
+                }
+
+                var arena_state = std.heap.ArenaAllocator.init(std.heap.c_allocator);
+                defer arena_state.deinit();
+                const arena = arena_state.allocator();
+
+                var messages: std.ArrayList(types.ChatMessage) = .empty;
+                try session_mod.appendHistoryChatMessages(arena, &messages, app.session.history.items);
+
+                const session_id = if (comptime @hasDecl(App, "activeSessionId"))
+                    app.activeSessionId() orelse "session"
+                else if (comptime @hasField(App, "session_persistence"))
+                    app_session_runtime.Runtime(App).activeSessionId(app) orelse "session"
+                else
+                    "session";
+
+                const session_title = if (comptime @hasField(App, "session_title"))
+                    if (app.session_title.items.len > 0) app.session_title.items else null
+                else
+                    null;
+
+                const model = if (comptime @hasDecl(App, "activeModel"))
+                    app.activeModel()
+                else if (comptime @hasField(App, "model"))
+                    app.model
+                else
+                    "unknown";
+                const effort_str = if (comptime @hasField(App, "effort"))
+                    app.effort.displayLabel()
+                else
+                    "default";
+
+                const payload = session_export.ExportPayload{
+                    .session_id = session_id,
+                    .session_title = session_title,
+                    .model = model,
+                    .effort = effort_str,
+                    .messages = messages.items,
+                };
+
+                const html = try session_export.renderSessionHtml(arena, payload);
+
+                const output_path = if (trimmed_arg.len > 0)
+                    try text_utils.stripQuotesAlloc(arena, trimmed_arg)
+                else
+                    try std.fmt.allocPrint(arena, "afx-session-{s}.html", .{session_id});
+
+                var out_file = std.Io.Dir.cwd().createFile(io_mod.getIo(), output_path, .{ .truncate = true }) catch |err| {
+                    debug_trace.logf("export", "session export failed to write path={s} err={s}", .{ output_path, @errorName(err) });
+                    try app.writeDomainNotice(.{
+                        .topic = "export",
+                        .tone = .@"error",
+                        .body = "Failed to write export file.",
+                    }, true);
+                    return;
+                };
+                defer out_file.close(io_mod.getIo());
+                out_file.writeStreamingAll(io_mod.getIo(), html) catch |err| {
+                    debug_trace.logf("export", "session export failed to write content path={s} err={s}", .{ output_path, @errorName(err) });
+                    try app.writeDomainNotice(.{
+                        .topic = "export",
+                        .tone = .@"error",
+                        .body = "Failed to write export file.",
+                    }, true);
+                    return;
+                };
+
+                const notice_body = try std.fmt.allocPrint(
+                    arena,
+                    "Exported session to {s}",
+                    .{output_path},
+                );
+                try app.writeDomainNotice(.{
+                    .topic = "export",
+                    .tone = .neutral,
+                    .body = notice_body,
+                }, true);
+            } else {
+                try app.writeDomainNotice(.{
+                    .topic = "export",
+                    .tone = .neutral,
+                    .body = "No messages to export yet.",
+                }, true);
+            }
+        }
+
         fn commandSubmitFeedback(ctx: *anyopaque) !void {
             const app: *App = @ptrCast(@alignCast(ctx));
             try handleFeedback(app);
@@ -1980,6 +2273,50 @@ pub fn Handlers(comptime App: type) type {
                 .topic = "version",
                 .tone = .neutral,
                 .body = App.app_version,
+            }, true);
+        }
+
+        fn commandHotkeys(ctx: *anyopaque) !void {
+            const app: *App = @ptrCast(@alignCast(ctx));
+            const km = keybindings.getGlobalKeymap();
+            var out = std.Io.Writer.Allocating.init(app.alloc);
+            defer out.deinit();
+
+            try out.writer.writeAll("Active keybindings:\n\n");
+            inline for (std.meta.fields(keybindings.ActionId)) |field| {
+                const action: keybindings.ActionId = @enumFromInt(field.value);
+                const binding = km.bindings[@intFromEnum(action)];
+                var chord_buf: [128]u8 = undefined;
+                var chord_str: []const u8 = "";
+                if (binding.count == 0) {
+                    chord_str = "[disabled]";
+                } else {
+                    var chord_list = std.Io.Writer.Allocating.init(app.alloc);
+                    defer chord_list.deinit();
+                    for (binding.slice(), 0..) |chord, idx| {
+                        if (idx > 0) try chord_list.writer.writeAll(", ");
+                        var buf: [32]u8 = undefined;
+                        const formatted = keybindings.formatChord(chord, &buf) catch "";
+                        try chord_list.writer.writeAll(formatted);
+                    }
+                    const written = chord_list.written();
+                    const copy_len = @min(chord_buf.len, written.len);
+                    @memcpy(chord_buf[0..copy_len], written[0..copy_len]);
+                    chord_str = chord_buf[0..copy_len];
+                }
+                const status_str = if (binding.is_remapped) "custom" else "default";
+                try out.writer.print("  {s:<32} {s:<22} {s:<10} {s}\n", .{
+                    action.name(),
+                    chord_str,
+                    status_str,
+                    action.description(),
+                });
+            }
+
+            try app.writeDomainNotice(.{
+                .topic = "hotkeys",
+                .tone = .neutral,
+                .body = out.written(),
             }, true);
         }
 
@@ -3250,6 +3587,8 @@ fn statuslineItemForSetting(setting: settings_catalog.SettingId) ?config_runtime
         .statusline_context => .context,
         .statusline_session => .session,
         .statusline_workspace => .workspace,
+        .statusline_cost => .cost,
+        .statusline_git => .git,
         else => null,
     };
 }
@@ -3263,6 +3602,16 @@ fn statuslineItemEnabled(app: anytype, item: config_runtime.StatuslineItem) bool
             app.workspace_identity.enabled
         else
             false,
+        .cost => if (comptime @hasField(App, "statusline_cost"))
+            app.statusline_cost
+        else
+            false,
+        .git => if (comptime @hasField(App, "statusline_git"))
+            app.statusline_git
+        else if (comptime @hasField(App, "workspace_identity"))
+            app.workspace_identity.git_enabled
+        else
+            false,
     };
 }
 
@@ -3274,6 +3623,17 @@ fn assignStatuslineItem(app: anytype, item: config_runtime.StatuslineItem, enabl
         .session => app.statusline_session = enabled,
         .workspace => if (comptime @hasField(App, "workspace_identity")) {
             app.workspace_identity.enabled = enabled;
+        },
+        .cost => if (comptime @hasField(App, "statusline_cost")) {
+            app.statusline_cost = enabled;
+        },
+        .git => {
+            if (comptime @hasField(App, "statusline_git")) {
+                app.statusline_git = enabled;
+            }
+            if (comptime @hasField(App, "workspace_identity")) {
+                app.workspace_identity.git_enabled = enabled;
+            }
         },
     }
     return current != enabled;
@@ -3310,7 +3670,7 @@ fn handleStatuslineCommand(app: anytype, rest: []const u8) !void {
         try app.writeDomainNotice(.{
             .topic = "statusline",
             .tone = .@"error",
-            .body = "Use: context, session, workspace",
+            .body = "Use: context, session, workspace, cost, git",
         }, true);
         return;
     };
@@ -3451,6 +3811,8 @@ pub fn settingsCatalogSnapshot(app: anytype) settings_catalog.Snapshot {
     if (comptime @hasField(App, "statusline_context")) snapshot.statusline_context = app.statusline_context;
     if (comptime @hasField(App, "statusline_session")) snapshot.statusline_session = app.statusline_session;
     if (comptime @hasField(App, "workspace_identity")) snapshot.statusline_workspace = app.workspace_identity.enabled;
+    if (comptime @hasField(App, "statusline_cost")) snapshot.statusline_cost = app.statusline_cost;
+    if (comptime @hasField(App, "statusline_git")) snapshot.statusline_git = app.statusline_git;
     if (comptime @hasField(App, "prompt_history")) snapshot.prompt_history = app.prompt_history.enabled;
     if (comptime @hasDecl(App, "notificationPreferences")) {
         const notifications = app.notificationPreferences();
@@ -3459,6 +3821,11 @@ pub fn settingsCatalogSnapshot(app: anytype) settings_catalog.Snapshot {
             notifications.attention_required,
             notifications.max,
         );
+    }
+    if (comptime @hasField(App, "theme_name")) {
+        snapshot.theme = app.theme_name;
+    } else {
+        snapshot.theme = ui_render.current_theme.getName();
     }
     return snapshot;
 }
@@ -3503,7 +3870,20 @@ pub fn applySettingsCatalogChange(app: anytype, change: settings_catalog.Change)
     switch (change.setting) {
         .model => unreachable,
         .agent_profiles, .agent_model, .agent_effort, .agent_permission, .agent_tools, .agent_spawns, .spawn_depth, .hub_wait => {},
-        .statusline_context, .statusline_session, .statusline_workspace => {
+        .theme => {
+            const current_name = ui_render.current_theme.getName();
+            const runtime_changed = !std.mem.eql(u8, change.value, current_name);
+            if (runtime_changed) {
+                if (comptime @hasField(@TypeOf(app.*), "theme_name")) {
+                    app.theme_name = change.value;
+                }
+                const is_light = ui_render.is_light;
+                ui_render.initThemeNamed(change.value, is_light, null);
+                app.shell.render_requests.request(.first_frame);
+                app.shell.render_requests.request(.footer);
+            }
+        },
+        .statusline_context, .statusline_session, .statusline_workspace, .statusline_cost, .statusline_git => {
             const enabled = parseOnOff(change.value) orelse return error.InvalidSettingsCatalogValue;
             const item = statuslineItemForSetting(change.setting).?;
             if (enabled != statuslineItemEnabled(app, item)) {
@@ -3830,6 +4210,7 @@ const ClipboardCommandFakeApp = struct {
 
     const Session = struct {
         reply: ?[]const u8 = null,
+        history: std.ArrayList(types.HistoryTurn) = .empty,
 
         fn lastAssistantReply(self: *const Session) ?[]const u8 {
             return self.reply;
@@ -4262,6 +4643,94 @@ test "copy command reports missing replies and host failures" {
         try std.testing.expectEqualStrings("Failed to copy to clipboard.", app.last_body.?);
     }
     try std.testing.expectEqual(@as(usize, 2), app.copy_calls);
+}
+
+test "dump command reports missing history on empty session" {
+    var app = ClipboardCommandFakeApp{};
+
+    try Handlers(ClipboardCommandFakeApp).commandDump(@ptrCast(&app));
+
+    try std.testing.expectEqual(@as(usize, 0), app.copy_calls);
+    try std.testing.expectEqualStrings("dump", app.last_topic.?);
+    try std.testing.expectEqual(types.NoticeTone.neutral, app.last_tone.?);
+    try std.testing.expectEqualStrings("No messages to dump yet.", app.last_body.?);
+}
+
+test "dump command formats model context and copies to clipboard with sidecar" {
+    const alloc = std.testing.allocator;
+    var app = ClipboardCommandFakeApp{};
+    try app.session.history.append(alloc, .{ .assistant = .{
+        .user = .{ .text = @constCast("Explain the codebase") },
+        .assistant = @constCast("Here is an explanation."),
+    } });
+    defer app.session.history.deinit(alloc);
+
+    try Handlers(ClipboardCommandFakeApp).commandDump(@ptrCast(&app));
+
+    try std.testing.expectEqual(@as(usize, 1), app.copy_calls);
+    try std.testing.expect(app.copied_text != null);
+    try std.testing.expect(std.mem.find(u8, app.copied_text.?, "=== System Prompt ===") != null);
+    try std.testing.expect(std.mem.find(u8, app.copied_text.?, "=== Model & Configuration ===") != null);
+    try std.testing.expect(std.mem.find(u8, app.copied_text.?, "=== Conversation Messages ===") != null);
+    try std.testing.expect(std.mem.find(u8, app.copied_text.?, "Explain the codebase") != null);
+    try std.testing.expect(std.mem.find(u8, app.copied_text.?, "Here is an explanation.") != null);
+    try std.testing.expectEqualStrings("dump", app.last_topic.?);
+    try std.testing.expectEqual(types.NoticeTone.neutral, app.last_tone.?);
+    try std.testing.expect(std.mem.find(u8, app.last_body.?, "Copied model context to clipboard.") != null);
+    try std.testing.expect(std.mem.find(u8, app.last_body.?, "Sidecar: ") != null);
+}
+
+test "export command reports missing history on empty session" {
+    var app = ClipboardCommandFakeApp{};
+
+    try Handlers(ClipboardCommandFakeApp).commandExport(@ptrCast(&app), "");
+
+    try std.testing.expectEqualStrings("export", app.last_topic.?);
+    try std.testing.expectEqual(types.NoticeTone.neutral, app.last_tone.?);
+    try std.testing.expectEqualStrings("No messages to export yet.", app.last_body.?);
+}
+
+test "export command rejects --copy and points to dump" {
+    var app = ClipboardCommandFakeApp{};
+
+    try Handlers(ClipboardCommandFakeApp).commandExport(@ptrCast(&app), "--copy");
+
+    try std.testing.expectEqualStrings("export", app.last_topic.?);
+    try std.testing.expectEqual(types.NoticeTone.neutral, app.last_tone.?);
+    try std.testing.expectEqualStrings("To copy model context to clipboard, use /dump.", app.last_body.?);
+}
+
+test "export command writes HTML file and reports path on non-empty session" {
+    const alloc = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    var app = ClipboardCommandFakeApp{};
+    try app.session.history.append(alloc, .{ .assistant = .{
+        .user = .{ .text = @constCast("Hello world") },
+        .assistant = @constCast("Hi there"),
+    } });
+    defer app.session.history.deinit(alloc);
+
+    const out_path = try io_mod.dirRealpathAlloc(alloc, tmp.dir, ".");
+    defer alloc.free(out_path);
+    const target_file = try std.fs.path.join(alloc, &.{ out_path, "export-test.html" });
+    defer alloc.free(target_file);
+
+    try Handlers(ClipboardCommandFakeApp).commandExport(@ptrCast(&app), target_file);
+
+    try std.testing.expectEqualStrings("export", app.last_topic.?);
+    try std.testing.expectEqual(types.NoticeTone.neutral, app.last_tone.?);
+    try std.testing.expect(std.mem.find(u8, app.last_body.?, "Exported session to ") != null);
+
+    var file = try std.Io.Dir.openFileAbsolute(io_mod.getIo(), target_file, .{});
+    defer file.close(io_mod.getIo());
+    const content = try io_mod.readFileToEnd(alloc, &file, 1024 * 1024);
+    defer alloc.free(content);
+
+    try std.testing.expect(std.mem.startsWith(u8, content, "<!DOCTYPE html>"));
+    try std.testing.expect(std.mem.find(u8, content, "Hello world") != null);
+    try std.testing.expect(std.mem.find(u8, content, "Hi there") != null);
 }
 
 test "app_commands renders transactional status for explicit MCP reload" {

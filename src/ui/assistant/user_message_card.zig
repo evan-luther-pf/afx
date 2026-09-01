@@ -30,6 +30,11 @@ pub fn setStyle(light: bool, _: ?Rgb) void {
     accent_style = if (light) accent_light else accent_dark;
 }
 
+pub fn setCustomStyle(marker: ?[]const u8, accent: ?[]const u8) void {
+    if (marker) |m| marker_style = m;
+    if (accent) |a| accent_style = a;
+}
+
 pub fn promptMarkerStyle() []const u8 {
     return marker_style;
 }

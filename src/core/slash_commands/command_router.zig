@@ -19,6 +19,7 @@ pub const ParsedCommand = union(enum) {
     status,
     background,
     background_stop: []const u8,
+    fork,
     background_open: []const u8,
     background_logs: []const u8,
     image: []const u8,
@@ -34,6 +35,8 @@ pub const ParsedCommand = union(enum) {
     skills: []const u8,
     agents,
     copy,
+    dump,
+    export_session: []const u8,
     feedback,
     trace,
     compact,
@@ -48,6 +51,7 @@ pub const ParsedCommand = union(enum) {
     statusline: []const u8,
     notifications: []const u8,
     workspace: []const u8,
+    hotkeys,
     version,
     unknown,
 };
@@ -60,6 +64,8 @@ pub const CommandHandlers = struct {
     reset_session: *const fn (ctx: *anyopaque) anyerror!void,
     resume_session: *const fn (ctx: *anyopaque) anyerror!void,
     continue_recovery: *const fn (ctx: *anyopaque) anyerror!void,
+    rename_session: *const fn (ctx: *anyopaque, rest: []const u8) anyerror!void,
+    fork_session: *const fn (ctx: *anyopaque) anyerror!void,
     show_help: *const fn (ctx: *anyopaque) anyerror!void,
     login: *const fn (ctx: *anyopaque) anyerror!void,
     logout: *const fn (ctx: *anyopaque, rest: []const u8) anyerror!void,
@@ -82,6 +88,8 @@ pub const CommandHandlers = struct {
     handle_skills: *const fn (ctx: *anyopaque, rest: []const u8) anyerror!void,
     show_agents: *const fn (ctx: *anyopaque) anyerror!void,
     copy_last: *const fn (ctx: *anyopaque) anyerror!void,
+    dump_context: *const fn (ctx: *anyopaque) anyerror!void,
+    export_session: *const fn (ctx: *anyopaque, rest: []const u8) anyerror!void,
     submit_feedback: *const fn (ctx: *anyopaque) anyerror!void,
     create_trace: *const fn (ctx: *anyopaque) anyerror!void,
     compact_history: *const fn (ctx: *anyopaque) anyerror!void,
@@ -94,9 +102,9 @@ pub const CommandHandlers = struct {
     paste_clipboard: *const fn (ctx: *anyopaque) anyerror!void,
     toggle_fast: *const fn (ctx: *anyopaque) anyerror!void,
     handle_statusline: *const fn (ctx: *anyopaque, rest: []const u8) anyerror!void,
-    rename_session: *const fn (ctx: *anyopaque, rest: []const u8) anyerror!void,
     handle_notifications: *const fn (ctx: *anyopaque, rest: []const u8) anyerror!void,
     handle_workspace: *const fn (ctx: *anyopaque, rest: []const u8) anyerror!void,
+    hotkeys: *const fn (ctx: *anyopaque) anyerror!void,
     show_version: *const fn (ctx: *anyopaque) anyerror!void,
     unknown: *const fn (ctx: *anyopaque, cmd: []const u8) anyerror!void,
 };
@@ -114,6 +122,7 @@ fn parsedCommand(kind: SlashKind, payload: []const u8) ParsedCommand {
         .resume_session => .resume_session,
         .continue_recovery => .continue_recovery,
         .rename_session => .{ .rename_session = payload },
+        .fork => .fork,
         .help => .help,
         .login => .login,
         .logout => .{ .logout = payload },
@@ -136,6 +145,8 @@ fn parsedCommand(kind: SlashKind, payload: []const u8) ParsedCommand {
         .skills => .{ .skills = payload },
         .agents => .agents,
         .copy => .copy,
+        .dump => .dump,
+        .export_session => .{ .export_session = payload },
         .feedback => .feedback,
         .trace => .trace,
         .compact => .compact,
@@ -150,6 +161,7 @@ fn parsedCommand(kind: SlashKind, payload: []const u8) ParsedCommand {
         .statusline => .{ .statusline = payload },
         .notifications => .{ .notifications = payload },
         .workspace => .{ .workspace = payload },
+        .hotkeys => .hotkeys,
         .version => .version,
     };
 }
@@ -176,6 +188,7 @@ pub fn route(registry: SlashRegistry, handlers: *const CommandHandlers, cmd: []c
         .resume_session => try handlers.resume_session(handlers.ctx),
         .continue_recovery => try handlers.continue_recovery(handlers.ctx),
         .rename_session => |rest| try handlers.rename_session(handlers.ctx, rest),
+        .fork => try handlers.fork_session(handlers.ctx),
         .help => try handlers.show_help(handlers.ctx),
         .login => try handlers.login(handlers.ctx),
         .logout => |rest| try handlers.logout(handlers.ctx, rest),
@@ -198,6 +211,8 @@ pub fn route(registry: SlashRegistry, handlers: *const CommandHandlers, cmd: []c
         .skills => |rest| try handlers.handle_skills(handlers.ctx, rest),
         .agents => try handlers.show_agents(handlers.ctx),
         .copy => try handlers.copy_last(handlers.ctx),
+        .dump => try handlers.dump_context(handlers.ctx),
+        .export_session => |rest| try handlers.export_session(handlers.ctx, rest),
         .feedback => try handlers.submit_feedback(handlers.ctx),
         .trace => try handlers.create_trace(handlers.ctx),
         .compact => try handlers.compact_history(handlers.ctx),
@@ -212,6 +227,7 @@ pub fn route(registry: SlashRegistry, handlers: *const CommandHandlers, cmd: []c
         .statusline => |rest| try handlers.handle_statusline(handlers.ctx, rest),
         .notifications => |rest| try handlers.handle_notifications(handlers.ctx, rest),
         .workspace => |rest| try handlers.handle_workspace(handlers.ctx, rest),
+        .hotkeys => try handlers.hotkeys(handlers.ctx),
         .version => try handlers.show_version(handlers.ctx),
         .unknown => try handlers.unknown(handlers.ctx, cmd),
     }
@@ -348,6 +364,8 @@ test "parse recognizes exact no-payload commands" {
     try std.testing.expectEqual(ParsedCommand.paste, parse(testSlashRegistry(), "/paste"));
     try std.testing.expectEqual(ParsedCommand.fast, parse(testSlashRegistry(), "/fast"));
     try std.testing.expectEqual(ParsedCommand.version, parse(testSlashRegistry(), "/version"));
+    try std.testing.expectEqual(ParsedCommand.fork, parse(testSlashRegistry(), "/fork"));
+    try std.testing.expectEqual(ParsedCommand.dump, parse(testSlashRegistry(), "/dump"));
 }
 test "parse extracts plan command payload" {
     switch (parse(testSlashRegistry(), "/plan status")) {
@@ -572,7 +590,10 @@ fn testHandlers(ctx: *TestContext) CommandHandlers {
         .handle_skills = unexpectedPayload,
         .show_agents = unexpectedNoPayload,
         .copy_last = unexpectedNoPayload,
+        .dump_context = unexpectedNoPayload,
+        .export_session = unexpectedPayload,
         .submit_feedback = unexpectedNoPayload,
+        .fork_session = unexpectedNoPayload,
         .create_trace = unexpectedNoPayload,
         .compact_history = unexpectedNoPayload,
         .handle_tree = unexpectedPayload,
@@ -580,6 +601,7 @@ fn testHandlers(ctx: *TestContext) CommandHandlers {
         .handle_handoff = unexpectedPayload,
         .handle_settings = unexpectedPayload,
         .handle_alias = unexpectedPayload,
+        .hotkeys = unexpectedNoPayload,
         .show_credits = unexpectedNoPayload,
         .paste_clipboard = unexpectedNoPayload,
         .toggle_fast = unexpectedNoPayload,

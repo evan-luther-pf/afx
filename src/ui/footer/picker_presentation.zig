@@ -467,7 +467,7 @@ pub noinline fn composePickerOptionRow(
     // pickers keep the filled row.
     const selected_style = switch (kind) {
         .model_stage => ui_render.selected_completion_style,
-        .file, .slash, .auth => ui_render.approval_button_inactive_style,
+        .file, .slash, .auth, .history => ui_render.approval_button_inactive_style,
     };
     try row.appendSlice(alloc, if (selected) selected_style else ui_render.dim_style);
 
@@ -537,6 +537,7 @@ pub fn composePickerStatusRow(
             "no matching files",
         .slash => "no matching slash commands",
         .auth => "authentication actions unavailable",
+        .history => "no matching history entries",
     };
 
     try row_text.appendClipped(alloc, &row, label, @intCast(width_usize - @as(usize, start_col - 1)));

@@ -4299,6 +4299,64 @@ test "projection window handles scroll offsets at and past the document tail" {
     try std.testing.expectEqualStrings("", past_end);
 }
 
+test "search projection finds case-insensitive matches across static segments" {
+    const alloc = std.testing.allocator;
+    var projection = Projection{ .styles = .{} };
+    defer projection.deinit(alloc);
+    try projection.segments.append(alloc, .{ .static = try alloc.dupe(u8, "First line with Alpha\nSecond line with beta\nThird line with alpha again\n") });
+
+    const matches = try searchProjection(alloc, &projection, null, 80, "alpha");
+    defer alloc.free(matches);
+    try std.testing.expectEqual(@as(usize, 2), matches.len);
+    try std.testing.expectEqual(@as(u32, 0), matches[0]);
+    try std.testing.expectEqual(@as(u32, 2), matches[1]);
+
+    const no_matches = try searchProjection(alloc, &projection, null, 80, "gamma");
+    defer alloc.free(no_matches);
+    try std.testing.expectEqual(@as(usize, 0), no_matches.len);
+
+    const empty_query = try searchProjection(alloc, &projection, null, 80, "");
+    defer alloc.free(empty_query);
+    try std.testing.expectEqual(@as(usize, 0), empty_query.len);
+}
+
+test "search projection calculates wrapped line match rows" {
+    const alloc = std.testing.allocator;
+    var projection = Projection{ .styles = .{} };
+    defer projection.deinit(alloc);
+    // With cols = 10:
+    // "0123456789" (row 0)
+    // "abcdefghij" (row 1)
+    // "klmTARGETz\n" (row 2: "klmTARGETz")
+    // "other\n" (row 3)
+    try projection.segments.append(alloc, .{ .static = try alloc.dupe(u8, "0123456789abcdefghijklmTARGETz\nother\n") });
+
+    const matches = try searchProjection(alloc, &projection, null, 10, "target");
+    defer alloc.free(matches);
+    try std.testing.expectEqual(@as(usize, 1), matches.len);
+    try std.testing.expectEqual(@as(u32, 2), matches[0]);
+}
+
+test "highlight search matches wraps matches with reverse video ANSI" {
+    const alloc = std.testing.allocator;
+    const source = "Hello World, hello AFX!\n";
+    const highlighted = try highlightSearchMatches(alloc, source, "hello");
+    defer alloc.free(highlighted);
+
+    try std.testing.expectEqualStrings(
+        "\x1b[7mHello\x1b[27m World, \x1b[7mhello\x1b[27m AFX!\n",
+        highlighted,
+    );
+
+    const styled_source = "\x1b[32mgreen Hello\x1b[0m world\n";
+    const styled_highlighted = try highlightSearchMatches(alloc, styled_source, "hello");
+    defer alloc.free(styled_highlighted);
+    try std.testing.expectEqualStrings(
+        "\x1b[32mgreen \x1b[7mHello\x1b[27m\x1b[0m world\n",
+        styled_highlighted,
+    );
+}
+
 pub fn buildProjection(
     alloc: Allocator,
     entries: []const transcript_blocks.TranscriptEntry,
@@ -4606,12 +4664,21 @@ fn walkProjectionSegments(
 /// Single row-geometry walk (wrap rules of `visualRowsForLine`) behind both
 /// measurement and window extraction, so scroll bounds cannot disagree with
 /// the rows the window yields. A window captures rows [start_row, end_row).
+pub const SearchCollector = struct {
+    alloc: Allocator,
+    query: []const u8,
+    matched_chars: usize = 0,
+    match_start_row: u32 = 0,
+    matches: std.ArrayList(u32),
+};
+
 const ProjectionRowWalker = struct {
     cols: u16,
     row: u32 = 0,
     col: u16 = 1,
     row_has_bytes: bool = false,
     window: ?Window = null,
+    search_collector: ?*SearchCollector = null,
     build_checkpoint: ?*BuildCheckpoint = null,
 
     const Window = struct {
@@ -4622,6 +4689,18 @@ const ProjectionRowWalker = struct {
 
     fn initMeasure(cols: u16, build_checkpoint_ptr: ?*BuildCheckpoint) ProjectionRowWalker {
         return .{ .cols = @max(cols, 1), .build_checkpoint = build_checkpoint_ptr };
+    }
+
+    fn initSearch(
+        cols: u16,
+        collector: *SearchCollector,
+        build_checkpoint_ptr: ?*BuildCheckpoint,
+    ) ProjectionRowWalker {
+        return .{
+            .cols = @max(cols, 1),
+            .search_collector = collector,
+            .build_checkpoint = build_checkpoint_ptr,
+        };
     }
 
     fn initMeasureAt(
@@ -4726,6 +4805,9 @@ const ProjectionRowWalker = struct {
                 continue;
             }
             if (ch == '\n') {
+                if (self.search_collector) |collector| {
+                    collector.matched_chars = 0;
+                }
                 try self.emit(bytes[index .. index + 1]);
                 self.row +|= 1;
                 self.col = 1;
@@ -4767,6 +4849,33 @@ const ProjectionRowWalker = struct {
                     try self.emit(soft_wrap_prefix);
                     self.col = 1 + @as(u16, @intCast(prefix_width));
                     self.row_has_bytes = true;
+                }
+            }
+            if (self.search_collector) |collector| {
+                if (collector.query.len > 0) {
+                    for (bytes[index .. index + unit.byte_len]) |b| {
+                        const expected = collector.query[collector.matched_chars];
+                        if (std.ascii.toLower(b) == std.ascii.toLower(expected)) {
+                            if (collector.matched_chars == 0) {
+                                collector.match_start_row = self.row;
+                            }
+                            collector.matched_chars += 1;
+                            if (collector.matched_chars == collector.query.len) {
+                                try collector.matches.append(collector.alloc, collector.match_start_row);
+                                collector.matched_chars = 0;
+                            }
+                        } else {
+                            if (std.ascii.toLower(b) == std.ascii.toLower(collector.query[0])) {
+                                collector.match_start_row = self.row;
+                                collector.matched_chars = if (collector.query.len == 1) blk: {
+                                    try collector.matches.append(collector.alloc, collector.match_start_row);
+                                    break :blk 0;
+                                } else 1;
+                            } else {
+                                collector.matched_chars = 0;
+                            }
+                        }
+                    }
                 }
             }
             try self.emit(bytes[index .. index + unit.byte_len]);
@@ -6609,6 +6718,101 @@ pub fn renderProjectionViewportSourceWithSelectorInterruptible(
         .{ .selector = offset_selector },
         checkpoint,
     );
+}
+
+pub fn searchProjection(
+    alloc: Allocator,
+    projection: *Projection,
+    capability: ?*session_child_store.SessionChildCapability,
+    cols: u16,
+    query: []const u8,
+) ![]u32 {
+    return searchProjectionInterruptible(alloc, projection, capability, cols, query, null);
+}
+
+pub fn searchProjectionInterruptible(
+    alloc: Allocator,
+    projection: *Projection,
+    capability: ?*session_child_store.SessionChildCapability,
+    cols: u16,
+    query: []const u8,
+    checkpoint: ?*BuildCheckpoint,
+) ![]u32 {
+    if (query.len == 0 or cols == 0) return try alloc.alloc(u32, 0);
+    var collector = SearchCollector{
+        .alloc = alloc,
+        .query = query,
+        .matches = .empty,
+    };
+    errdefer collector.matches.deinit(alloc);
+
+    var walker = ProjectionRowWalker.initSearch(cols, &collector, checkpoint);
+    defer walker.deinit();
+
+    _ = try walkProjectionSegments(
+        alloc,
+        projection,
+        capability,
+        &walker,
+        0,
+        0,
+        null,
+        null,
+    );
+
+    return collector.matches.toOwnedSlice(alloc);
+}
+
+pub fn highlightSearchMatches(
+    alloc: Allocator,
+    source_bytes: []const u8,
+    query: []const u8,
+) ![]u8 {
+    if (query.len == 0 or source_bytes.len == 0) {
+        return alloc.dupe(u8, source_bytes);
+    }
+
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(alloc);
+
+    var i: usize = 0;
+    while (i < source_bytes.len) {
+        if (source_bytes[i] == 0x1b) {
+            const end = display_width.ansiSequenceEnd(source_bytes, i);
+            try out.appendSlice(alloc, source_bytes[i..end]);
+            i = end;
+            continue;
+        }
+
+        if (matchesQueryAt(source_bytes, i, query)) |match_len| {
+            try out.appendSlice(alloc, "\x1b[7m");
+            try out.appendSlice(alloc, source_bytes[i .. i + match_len]);
+            try out.appendSlice(alloc, "\x1b[27m");
+            i += match_len;
+        } else {
+            try out.append(alloc, source_bytes[i]);
+            i += 1;
+        }
+    }
+
+    return out.toOwnedSlice(alloc);
+}
+
+fn matchesQueryAt(bytes: []const u8, start: usize, query: []const u8) ?usize {
+    var b_idx = start;
+    var q_idx: usize = 0;
+    while (q_idx < query.len) {
+        if (b_idx >= bytes.len) return null;
+        if (bytes[b_idx] == 0x1b) {
+            b_idx = display_width.ansiSequenceEnd(bytes, b_idx);
+            continue;
+        }
+        if (bytes[b_idx] == '\n' or bytes[b_idx] == '\r') return null;
+        if (std.ascii.toLower(bytes[b_idx]) != std.ascii.toLower(query[q_idx])) return null;
+        b_idx += 1;
+        q_idx += 1;
+    }
+    return b_idx - start;
 }
 
 const ViewportSelection = union(enum) {

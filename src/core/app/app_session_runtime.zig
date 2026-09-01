@@ -3036,6 +3036,56 @@ pub fn Runtime(comptime App: type) type {
             return session_tree.format(app.alloc, tree);
         }
 
+        pub fn forkActiveSession(app: *App) ![]u8 {
+            if (comptime !@hasField(App, "session_persistence")) {
+                return error.SessionPersistenceUnavailable;
+            }
+            app.session_persistence.write_mutex.lockUncancelable(io_mod.getIo());
+            defer app.session_persistence.write_mutex.unlock(io_mod.getIo());
+
+            const loaded = if (app.session_persistence.writable) |*value|
+                value
+            else
+                return error.NoActiveSession;
+
+            const store = app.session_persistence.store orelse
+                return error.SessionStoreUnavailable;
+
+            const source_id = loaded.active_id;
+            const new_id = try session_store.generateSessionId(app.alloc);
+            errdefer app.alloc.free(new_id);
+
+            const now_ms = io_mod.milliTimestamp();
+            var current_state = try snapshotCurrentState(app, loaded.state, now_ms);
+            defer current_state.deinit(app.alloc);
+
+            app.alloc.free(current_state.id);
+            current_state.id = try app.alloc.dupe(u8, new_id);
+
+            const target_dir_path = try session_store.sessionDirPath(app.alloc, store.sessions_dir, new_id);
+            defer app.alloc.free(target_dir_path);
+            var success = false;
+            errdefer if (!success) {
+                std.Io.Dir.cwd().deleteTree(io_mod.getIo(), target_dir_path) catch {};
+            };
+
+            // Start new writable session in store with cloned state
+            var forked_session = try store.startWritableSession(app.alloc, current_state);
+            defer forked_session.deinit(app.alloc);
+            try forked_session.writeCheckpointIfDue(app.alloc, true, .{});
+
+            // Copy images, results, logs subdirectories if present (excluding background & subagent)
+            const source_dir_path = try session_store.sessionDirPath(app.alloc, store.sessions_dir, source_id);
+            defer app.alloc.free(source_dir_path);
+
+            try session_store.copyForkSubdirIfExists(app.alloc, source_dir_path, target_dir_path, "images");
+            try session_store.copyForkSubdirIfExists(app.alloc, source_dir_path, target_dir_path, "results");
+            try session_store.copyForkSubdirIfExists(app.alloc, source_dir_path, target_dir_path, "logs");
+
+            success = true;
+            return new_id;
+        }
+
         pub fn handleSessionTree(app: *App, raw: []const u8) ![]u8 {
             if (comptime !@hasField(App, "session_persistence")) {
                 return app.alloc.dupe(u8, "Session tree requires native saved-session persistence.");

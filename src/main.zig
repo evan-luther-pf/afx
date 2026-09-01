@@ -36,8 +36,9 @@ const app_worker_runtime = @import("core/app/app_worker_runtime.zig");
 const app_workspace_runtime = @import("core/app/app_workspace_runtime.zig");
 const app_callbacks = @import("core/app/app_callbacks.zig");
 const app_commands = @import("core/app/app_commands.zig");
-const change_tracker_mod = @import("core/workspace/change_tracker.zig");
+const keybindings = @import("core/input/keybindings.zig");
 const context_contract = @import("core/workspace/context_contract.zig");
+const change_tracker_mod = @import("core/workspace/change_tracker.zig");
 const statusline_identity = @import("core/workspace/statusline_identity.zig");
 const collections = @import("core/shared/collections.zig");
 const agent_steps = @import("core/config/agent_steps.zig");
@@ -924,6 +925,8 @@ const App = struct {
 
     statusline_context: bool = false,
     statusline_session: bool = false,
+    statusline_cost: bool = false,
+    statusline_git: bool = false,
     /// Resolved display title for the active session. App owns these bytes;
     /// empty means no title has been derived or restored yet.
     session_title: std.ArrayList(u8) = .empty,
@@ -976,6 +979,7 @@ const App = struct {
             launch.requested_resume = null;
         }
         errdefer if (app.requested_resume) |*target| target.deinit(alloc);
+        keybindings.initGlobalKeymap(alloc, io_mod.getenv("HOME"));
         try BootstrapAppRuntime.bootstrap(
             &app,
             footer_rows,
@@ -4219,6 +4223,9 @@ test {
     _ = @import("core/app/app_session_runtime.zig");
     _ = @import("core/app/app_upgrade_runtime.zig");
     _ = @import("core/app/app_worker_runtime.zig");
+    _ = @import("core/app/external_editor.zig");
+    _ = @import("core/input/keybindings.zig");
+    _ = @import("ui/theme.zig");
     _ = @import("ui/event_loop.zig");
     _ = @import("ui/resize_tests.zig");
     _ = @import("ui/render_engine/assistant_wrap.zig");
@@ -4361,6 +4368,7 @@ test {
     _ = @import("tools/agent/hub.zig");
     _ = @import("tools/agent/task.zig");
     _ = @import("tools/session/todo.zig");
+    _ = @import("tools/session/checkpoint.zig");
     _ = @import("builtins/browser_workspace_tools.zig");
     _ = @import("core/tooling/model_request_budget.zig");
     _ = @import("core/tooling/web_fetch_runtime.zig");

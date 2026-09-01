@@ -304,8 +304,15 @@ pub fn Runtime(comptime App: type) type {
             app_permission_runtime.Runtime(App).initializeYoloWarning(app);
             app.statusline_context = startup.statusline_context;
             app.statusline_session = startup.statusline_session;
+            if (comptime @hasField(App, "statusline_cost")) {
+                app.statusline_cost = startup.statusline_cost;
+            }
+            if (comptime @hasField(App, "statusline_git")) {
+                app.statusline_git = startup.statusline_git;
+            }
             if (comptime @hasField(App, "workspace_identity")) {
                 app.workspace_identity.enabled = startup.statusline_workspace;
+                app.workspace_identity.git_enabled = startup.statusline_git;
             }
             if (comptime @hasDecl(App, "setNotificationPreferences")) {
                 app.setNotificationPreferences(

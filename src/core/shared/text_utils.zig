@@ -19,6 +19,17 @@ pub fn isModelSafeText(text: []const u8) bool {
     return std.unicode.utf8ValidateSlice(text);
 }
 
+pub fn stripQuotes(text: []const u8) []const u8 {
+    if (text.len >= 2 and ((text[0] == '"' and text[text.len - 1] == '"') or (text[0] == '\'' and text[text.len - 1] == '\''))) {
+        return text[1 .. text.len - 1];
+    }
+    return text;
+}
+
+pub fn stripQuotesAlloc(alloc: std.mem.Allocator, text: []const u8) ![]u8 {
+    return alloc.dupe(u8, stripQuotes(text));
+}
+
 pub fn utf8BackwardBoundary(text: []const u8, index: usize) usize {
     var len = @min(index, text.len);
     while (len > 0 and len < text.len and (text[len] & 0b1100_0000) == 0b1000_0000) {

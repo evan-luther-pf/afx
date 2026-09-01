@@ -9,6 +9,8 @@ const max_encoded_branch_bytes: usize = 512;
 pub const Snapshot = struct {
     workspace_label: []const u8 = "",
     git_branch: ?[]const u8 = null,
+    git_label: ?[]const u8 = null,
+    is_dirty: bool = false,
 };
 
 const HeadSignature = struct {
@@ -39,24 +41,31 @@ const HeadPathResolution = union(enum) {
 /// unless its metadata changes.
 pub const Runtime = struct {
     enabled: bool = false,
+    git_enabled: bool = false,
     workspace_root: []u8 = &.{},
     workspace_label: []u8 = &.{},
     head_path: []u8 = &.{},
     branch_label: []u8 = &.{},
+    git_label: []u8 = &.{},
     head_signature: ?HeadSignature = null,
+    is_dirty: bool = false,
+    last_dirty_check_ms: i64 = 0,
 
     pub fn deinit(self: *Runtime, alloc: std.mem.Allocator) void {
         freeOwned(alloc, &self.workspace_root);
         freeOwned(alloc, &self.workspace_label);
         freeOwned(alloc, &self.head_path);
         freeOwned(alloc, &self.branch_label);
+        freeOwned(alloc, &self.git_label);
         self.* = .{};
     }
 
     pub fn snapshot(self: *const Runtime) Snapshot {
         return .{
-            .workspace_label = self.workspace_label,
-            .git_branch = if (self.branch_label.len > 0) self.branch_label else null,
+            .workspace_label = if (self.enabled) self.workspace_label else "",
+            .git_branch = if (self.enabled and self.branch_label.len > 0) self.branch_label else null,
+            .git_label = if (self.git_enabled and self.git_label.len > 0) self.git_label else null,
+            .is_dirty = self.is_dirty,
         };
     }
 
@@ -65,11 +74,14 @@ pub const Runtime = struct {
         alloc: std.mem.Allocator,
         workspace_root: []const u8,
     ) !Snapshot {
-        if (!self.enabled) return .{};
+        if (!self.enabled and !self.git_enabled) return .{};
         if (!std.mem.eql(u8, self.workspace_root, workspace_root)) {
             try self.rebuildWorkspace(alloc, workspace_root);
         }
         try self.refreshBranch(alloc);
+        if (self.git_enabled and self.git_label.len == 0 and self.branch_label.len > 0) {
+            try self.updateGitLabel(alloc);
+        }
         return self.snapshot();
     }
 
@@ -96,6 +108,7 @@ pub const Runtime = struct {
         freeOwned(alloc, &self.workspace_label);
         freeOwned(alloc, &self.head_path);
         freeOwned(alloc, &self.branch_label);
+        freeOwned(alloc, &self.git_label);
 
         self.workspace_root = next_root;
         self.workspace_label = encoded_path;
@@ -155,13 +168,64 @@ pub const Runtime = struct {
             );
             freeOwned(alloc, &self.branch_label);
             self.branch_label = encoded.bytes;
+            freeOwned(alloc, &self.git_label);
             encoded.bytes = &.{};
         } else {
             freeOwned(alloc, &self.branch_label);
         }
         self.head_signature = signature;
     }
+
+    // ponytail: 3s dirty polling ceiling, adequate for interactive statusline; executed off render thread
+    pub fn refreshDirty(self: *Runtime, alloc: std.mem.Allocator) void {
+        if (self.head_path.len == 0 or self.branch_label.len == 0) {
+            freeOwned(alloc, &self.git_label);
+            self.is_dirty = false;
+            return;
+        }
+
+        const now_ms = io_mod.milliTimestamp();
+        if (self.git_label.len == 0 or now_ms - self.last_dirty_check_ms >= 3000) {
+            self.last_dirty_check_ms = now_ms;
+            const git_dir = std.fs.path.dirname(self.head_path) orelse "";
+            self.is_dirty = checkGitDirty(alloc, git_dir, self.workspace_root);
+            self.updateGitLabel(alloc) catch {};
+        }
+    }
+
+    fn updateGitLabel(self: *Runtime, alloc: std.mem.Allocator) !void {
+        if (self.branch_label.len == 0) {
+            freeOwned(alloc, &self.git_label);
+            return;
+        }
+        freeOwned(alloc, &self.git_label);
+        if (self.is_dirty) {
+            const label = try std.fmt.allocPrint(alloc, "{s}*", .{self.branch_label});
+            self.git_label = label;
+        } else {
+            self.git_label = try alloc.dupe(u8, self.branch_label);
+        }
+    }
 };
+
+fn checkGitDirty(alloc: std.mem.Allocator, git_dir: []const u8, workspace_root: []const u8) bool {
+    if (workspace_root.len == 0 or git_dir.len == 0) return false;
+    const git_dir_arg = std.fmt.allocPrint(alloc, "--git-dir={s}", .{git_dir}) catch return false;
+    defer alloc.free(git_dir_arg);
+    const work_tree_arg = std.fmt.allocPrint(alloc, "--work-tree={s}", .{workspace_root}) catch return false;
+    defer alloc.free(work_tree_arg);
+
+    const result = std.process.run(alloc, io_mod.getIo(), .{
+        .argv = &.{ "git", git_dir_arg, work_tree_arg, "status", "--porcelain" },
+    }) catch return false;
+    defer {
+        alloc.free(result.stdout);
+        alloc.free(result.stderr);
+    }
+    if (result.term != .exited or result.term.exited != 0) return false;
+    const trimmed = std.mem.trim(u8, result.stdout, " \t\r\n");
+    return trimmed.len > 0;
+}
 
 fn freeOwned(alloc: std.mem.Allocator, bytes: *[]u8) void {
     if (bytes.*.len > 0) alloc.free(bytes.*);
@@ -431,4 +495,44 @@ test "workspace statusline disabled refresh preserves cached identity" {
     runtime.enabled = true;
     const reenabled = try runtime.refresh(alloc, root);
     try std.testing.expectEqualStrings("changed-while-disabled", reenabled.git_branch.?);
+}
+
+test "workspace statusline identity git_label formatting and degradation" {
+    const alloc = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try writeTestFile(tmp.dir, "workspace/.git/HEAD", "ref: refs/heads/main\n");
+
+    const root = try io_mod.dirRealpathAlloc(alloc, tmp.dir, "workspace");
+    defer alloc.free(root);
+
+    var runtime: Runtime = .{ .git_enabled = true };
+    defer runtime.deinit(alloc);
+
+    // Clean or fallback label when git status is empty / non-git
+    const snapshot = try runtime.refresh(alloc, root);
+    try std.testing.expectEqualStrings("main", snapshot.git_label.?);
+
+    // When disabled, git_label is null
+    runtime.git_enabled = false;
+    const disabled = try runtime.refresh(alloc, root);
+    try std.testing.expect(disabled.git_label == null);
+}
+
+test "workspace statusline identity git_label hidden outside git repository" {
+    const alloc = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(io_mod.getIo(), "not-a-repo");
+    try writeTestFile(tmp.dir, "not-a-repo/.git", "not a Git directory\n");
+
+    const root = try io_mod.dirRealpathAlloc(alloc, tmp.dir, "not-a-repo");
+    defer alloc.free(root);
+
+    var runtime: Runtime = .{ .git_enabled = true };
+    defer runtime.deinit(alloc);
+
+    const snapshot = try runtime.refresh(alloc, root);
+    try std.testing.expect(snapshot.git_label == null);
+    try std.testing.expect(snapshot.git_branch == null);
 }

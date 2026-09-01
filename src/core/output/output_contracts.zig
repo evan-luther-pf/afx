@@ -13,6 +13,8 @@ const text_utils = @import("../shared/text_utils.zig");
 const types = @import("../shared/types.zig");
 const workspace_access = @import("../workspace/workspace_access.zig");
 const workspace_commands = @import("../workspace/workspace_commands.zig");
+pub const model_dump = @import("model_dump.zig");
+pub const session_export = @import("session_export.zig");
 
 const Allocator = std.mem.Allocator;
 

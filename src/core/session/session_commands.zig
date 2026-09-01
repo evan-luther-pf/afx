@@ -189,12 +189,16 @@ fn appendShadowedUserSources(
         const source: ?config_runtime.ConfigSource = switch (item.item) {
             .context => sources.statusline_context,
             .session => sources.statusline_session,
+            .cost => sources.statusline_cost,
+            .git => sources.statusline_git,
             .workspace => null,
         };
         if (source) |resolved| {
             const field = switch (item.item) {
                 .context => "statusLine.context",
                 .session => "statusLine.session",
+                .cost => "statusLine.cost",
+                .git => "statusLine.git",
                 .workspace => unreachable,
             };
             try appendShadowedUserSource(writer, field, true, resolved, &wrote_header);

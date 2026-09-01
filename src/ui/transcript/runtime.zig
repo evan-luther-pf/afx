@@ -6290,6 +6290,125 @@ pub const TranscriptRuntime = struct {
         return 1;
     }
 
+    pub fn openFullTranscriptSearch(self: *TranscriptRuntime) void {
+        self.full_transcript.search.open();
+    }
+
+    pub fn closeFullTranscriptSearch(self: *TranscriptRuntime) void {
+        self.full_transcript.search.clear();
+    }
+
+    pub fn confirmFullTranscriptSearch(self: *TranscriptRuntime) void {
+        self.full_transcript.search.confirm();
+    }
+
+    pub fn fullTranscriptSearchInputActive(self: *const TranscriptRuntime) bool {
+        return self.full_transcript.search.input_active;
+    }
+
+    pub fn fullTranscriptSearchActive(self: *const TranscriptRuntime) bool {
+        return self.full_transcript.search.isActive();
+    }
+
+    pub fn fullTranscriptSearchQuery(self: *const TranscriptRuntime) []const u8 {
+        return self.full_transcript.search.query();
+    }
+
+    pub fn appendFullTranscriptSearchChar(
+        self: *TranscriptRuntime,
+        alloc: Allocator,
+        capability: ?*session_child_store.SessionChildCapability,
+        diff_resolver: ?full_transcript_screen.FullDiffResolver,
+        c: u8,
+    ) !bool {
+        if (!self.full_transcript.search.appendChar(c)) return false;
+        try self.updateFullTranscriptSearch(alloc, capability, diff_resolver);
+        return true;
+    }
+
+    pub fn popFullTranscriptSearchChar(
+        self: *TranscriptRuntime,
+        alloc: Allocator,
+        capability: ?*session_child_store.SessionChildCapability,
+        diff_resolver: ?full_transcript_screen.FullDiffResolver,
+    ) !bool {
+        if (!self.full_transcript.search.popChar()) return false;
+        try self.updateFullTranscriptSearch(alloc, capability, diff_resolver);
+        return true;
+    }
+
+    pub fn updateFullTranscriptSearch(
+        self: *TranscriptRuntime,
+        alloc: Allocator,
+        capability: ?*session_child_store.SessionChildCapability,
+        diff_resolver: ?full_transcript_screen.FullDiffResolver,
+    ) !void {
+        const query = self.full_transcript.search.query();
+        if (query.len == 0) {
+            self.full_transcript.search.total_matches = 0;
+            self.full_transcript.search.active_match_index = null;
+            return;
+        }
+        const projection = try self.cachedFullTranscriptProjection(alloc, diff_resolver);
+        const matches = try full_transcript_screen.searchProjection(
+            alloc,
+            projection,
+            capability,
+            self.layout.cols,
+            query,
+        );
+        defer alloc.free(matches);
+        self.full_transcript.search.total_matches = @intCast(matches.len);
+        if (matches.len > 0) {
+            var nearest: usize = 0;
+            for (matches, 0..) |m, idx| {
+                if (m >= self.full_transcript.scroll_rows) {
+                    nearest = idx;
+                    break;
+                }
+            }
+            self.full_transcript.search.active_match_index = @intCast(nearest);
+            self.full_transcript.scroll_rows = matches[nearest];
+            self.full_transcript.follow_tail = false;
+        } else {
+            self.full_transcript.search.active_match_index = null;
+        }
+    }
+
+    pub fn jumpFullTranscriptSearchMatch(
+        self: *TranscriptRuntime,
+        alloc: Allocator,
+        capability: ?*session_child_store.SessionChildCapability,
+        diff_resolver: ?full_transcript_screen.FullDiffResolver,
+        direction: enum { next, prev },
+    ) !void {
+        const query = self.full_transcript.search.query();
+        if (query.len == 0) return;
+        const projection = try self.cachedFullTranscriptProjection(alloc, diff_resolver);
+        const matches = try full_transcript_screen.searchProjection(
+            alloc,
+            projection,
+            capability,
+            self.layout.cols,
+            query,
+        );
+        defer alloc.free(matches);
+        self.full_transcript.search.total_matches = @intCast(matches.len);
+        if (matches.len == 0) {
+            self.full_transcript.search.active_match_index = null;
+            return;
+        }
+        const cur = self.full_transcript.search.active_match_index orelse 0;
+        const count = @as(u32, @intCast(matches.len));
+        const next_idx = switch (direction) {
+            .next => (cur + 1) % count,
+            .prev => if (cur == 0) count - 1 else cur - 1,
+        };
+        self.full_transcript.search.active_match_index = next_idx;
+        self.full_transcript.scroll_rows = matches[next_idx];
+        self.full_transcript.follow_tail = false;
+    }
+
     pub fn initViewport(self: *TranscriptRuntime, metrics: *Metrics, requested_start_row: u16) !void {
         return transcript_viewport_runtime.initViewport(self, metrics, requested_start_row);
     }
@@ -9087,6 +9206,22 @@ pub const TranscriptRuntime = struct {
         }
     }
 
+    pub fn writeNotificationOsc(
+        self: *TranscriptRuntime,
+        metrics: *Metrics,
+        event: ui_render.NotificationEvent,
+    ) void {
+        const bytes = ui_render.formatOscNotification(event);
+        switch (transcript_io.writeFrameBytes(self, metrics, bytes)) {
+            .complete => {},
+            .partial => |partial| debug_trace.logf(
+                "notifications",
+                "terminal osc notification write failed accepted_bytes={d} err={s}",
+                .{ partial.accepted_bytes, @errorName(partial.err) },
+            ),
+        }
+    }
+
     fn writeFrameSink(ctx: *anyopaque, metrics: *Metrics, bytes: []const u8) render_engine.terminal_diff.FrameSinkWriteResult {
         const self: *TranscriptRuntime = @ptrCast(@alignCast(ctx));
         return transcript_io.writeFrameBytes(self, metrics, bytes);
@@ -9594,7 +9729,16 @@ pub const TranscriptRuntime = struct {
             .{ .context = self, .select_offset = selectProjectionViewportOffset },
             checkpoint,
         );
-        var source = try self.prepareFullTranscriptViewportSource(alloc, source_bytes);
+        const effective_bytes = if (self.full_transcript.search.query().len > 0) blk: {
+            const highlighted = try full_transcript_screen.highlightSearchMatches(
+                alloc,
+                source_bytes,
+                self.full_transcript.search.query(),
+            );
+            alloc.free(source_bytes);
+            break :blk highlighted;
+        } else source_bytes;
+        var source = try self.prepareFullTranscriptViewportSource(alloc, effective_bytes);
         errdefer source.deinit(alloc);
         const prepared = try transcript_painter.preparePreselectedTranscriptSurfacePaintFromSourceForArea(
             self,
@@ -11897,6 +12041,27 @@ test "notification bell writes standalone BEL bytes" {
         try file.readPositionalAll(io_mod.getIo(), &bytes, 0),
     );
     try std.testing.expectEqualSlices(u8, "\x07", &bytes);
+}
+
+test "writeNotificationOsc writes the exact OSC 9 escape sequence" {
+    const alloc = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const file = try tmp.dir.createFile(std.testing.io, "notification-osc.log", .{ .read = true });
+    defer file.close(io_mod.getIo());
+
+    var runtime = TranscriptRuntime{ .stdout_file = file };
+    defer runtime.deinit(alloc);
+    var metrics: Metrics = .{};
+    runtime.writeNotificationOsc(&metrics, .turn_complete);
+    runtime.writeNotificationOsc(&metrics, .approval_needed);
+
+    var read_file = try tmp.dir.openFile(io_mod.getIo(), "notification-osc.log", .{});
+    defer read_file.close(io_mod.getIo());
+    const written = try io_mod.readFileToEnd(alloc, &read_file, 128);
+    defer alloc.free(written);
+    try std.testing.expectEqualStrings("\x1b]9;afx: turn complete\x07\x1b]9;afx: approval needed\x07", written);
 }
 
 test {

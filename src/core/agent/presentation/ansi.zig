@@ -25,6 +25,11 @@ pub fn setInlineCodeTheme(light: bool) void {
     task_completed_open = if (light) task_completed_light_open else task_completed_dark_open;
 }
 
+pub fn setCustomInlineCodeStyle(code_open: ?[]const u8, completed_open: ?[]const u8) void {
+    if (code_open) |co| inline_code_open = co;
+    if (completed_open) |tco| task_completed_open = tco;
+}
+
 // Keeps table intersections aligned with row separators.
 pub const table_column_sep = " \xe2\x94\x82 ";
 pub const table_horiz = "\xe2\x94\x80";

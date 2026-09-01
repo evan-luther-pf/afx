@@ -4,7 +4,9 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -248,6 +250,165 @@ describe.skipIf(TMUX_SKIP)("tui: no-key slash commands", () => {
       }));
       expect(replay.frame_count).toBeGreaterThan(0);
       expect(replay.stdout_bytes).toBeGreaterThan(0);
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "/dump reports empty session and provides notice",
+    async () => {
+      const root = realpathSync(mkdtempSync(join(tmpdir(), "afx-dump-e2e-")));
+      const home = join(root, "home");
+      const workspace = join(root, "workspace");
+      const stderrPath = join(root, "stderr.log");
+      mkdirSync(home);
+      mkdirSync(workspace);
+      tempDirs.push(root);
+
+      session = await TmuxSession.create({
+        cwd: workspace,
+        stderrPath,
+        width: 100,
+        height: 30,
+        env: {
+          HOME: home,
+          AI_GATEWAY_API_KEY: "dump-test-key",
+          FX_AUTO_UPGRADE: "0",
+          FX_DISABLE_KEYCHAIN: "1",
+          FX_PERMISSION_MODE: "auto",
+          VERCEL_OIDC_TOKEN: undefined,
+          NO_COLOR: "1",
+        },
+      });
+      await session.waitForComposer(10_000);
+      await session.sendText("/dump");
+      await session.waitForText("No messages to dump yet.", 5_000);
+      await session.sendText("/quit");
+      expect(await session.waitForSessionEnd(5_000)).toBe(true);
+      session = null;
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "/dump copies model-facing context and writes sidecar file after a turn",
+    async () => {
+      const root = realpathSync(mkdtempSync(join(tmpdir(), "afx-dump-turn-e2e-")));
+      const home = join(root, "home");
+      const workspace = join(root, "workspace");
+      const stderrPath = join(root, "stderr.log");
+      mkdirSync(home);
+      mkdirSync(workspace);
+      tempDirs.push(root);
+      const fakeGateway = startFakeGateway([
+        fakeGatewayFinalText("DUMP_CONVERSATION_COMPLETE"),
+      ], {
+        models: [
+          { id: FAKE_GATEWAY_MODEL, type: "language", tags: ["tool-use"] },
+          { id: "anthropic/claude-opus-4.6", type: "language", tags: ["tool-use"] },
+          { id: "openai/gpt-5", type: "language", tags: ["tool-use"] },
+          { id: "gpt-5", type: "language", tags: ["tool-use"] },
+        ],
+      });
+
+      session = await TmuxSession.create({
+        cwd: workspace,
+        stderrPath,
+        width: 100,
+        height: 30,
+        env: {
+          HOME: home,
+          AI_GATEWAY_API_KEY: "dump-test-key",
+          FX_GATEWAY_BASE_URL: fakeGateway.baseUrl,
+          FX_GATEWAY_CHAT_URL: fakeGateway.chatUrl,
+          FX_MODEL: FAKE_GATEWAY_MODEL,
+          FX_AUTO_UPGRADE: "0",
+          FX_DISABLE_KEYCHAIN: "1",
+          FX_PERMISSION_MODE: "auto",
+          VERCEL_OIDC_TOKEN: undefined,
+          NO_COLOR: "1",
+        },
+      });
+      await session.waitForComposer(10_000);
+      await session.sendText("Hello from dump test");
+      await session.waitForText("DUMP_CONVERSATION_COMPLETE", 10_000);
+      await session.sendText("/dump");
+      await session.waitForText("Sidecar:", 5_000);
+
+      const tmpDir = process.env.TMPDIR ?? "/tmp";
+      const files = readdirSync(tmpDir).filter((f) => f.startsWith("afx-llm-request-") && f.endsWith(".json"));
+      expect(files.length).toBeGreaterThan(0);
+
+      const sidecarContent = readFileSync(join(tmpDir, files[0]), "utf8");
+      expect(sidecarContent).toContain("Hello from dump test");
+      expect(sidecarContent).toContain("DUMP_CONVERSATION_COMPLETE");
+
+      await session.sendText("/quit");
+      expect(await session.waitForSessionEnd(5_000)).toBe(true);
+      session = null;
+      fakeGateway.stop();
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "/export writes self-contained HTML file and reports path",
+    async () => {
+      const root = realpathSync(mkdtempSync(join(tmpdir(), "afx-export-e2e-")));
+      const home = join(root, "home");
+      const workspace = join(root, "workspace");
+      const stderrPath = join(root, "stderr.log");
+      const exportPath = join(root, "session.html");
+      mkdirSync(home);
+      mkdirSync(workspace);
+      tempDirs.push(root);
+
+      const fakeGateway = startFakeGateway([
+        fakeGatewayFinalText("EXPORT_CONVERSATION_COMPLETE"),
+      ], {
+        models: [
+          { id: FAKE_GATEWAY_MODEL, type: "language", tags: ["tool-use"] },
+          { id: "anthropic/claude-opus-4.6", type: "language", tags: ["tool-use"] },
+          { id: "openai/gpt-5", type: "language", tags: ["tool-use"] },
+          { id: "gpt-5", type: "language", tags: ["tool-use"] },
+        ],
+      });
+
+      session = await TmuxSession.create({
+        cwd: workspace,
+        stderrPath,
+        width: 100,
+        height: 30,
+        env: {
+          HOME: home,
+          AI_GATEWAY_API_KEY: "export-test-key",
+          FX_GATEWAY_BASE_URL: fakeGateway.baseUrl,
+          FX_GATEWAY_CHAT_URL: fakeGateway.chatUrl,
+          FX_MODEL: FAKE_GATEWAY_MODEL,
+          FX_AUTO_UPGRADE: "0",
+          FX_DISABLE_KEYCHAIN: "1",
+          FX_PERMISSION_MODE: "auto",
+          VERCEL_OIDC_TOKEN: undefined,
+          NO_COLOR: "1",
+        },
+      });
+      await session.waitForComposer(10_000);
+      await session.sendText("Hello from export test");
+      await session.waitForText("EXPORT_CONVERSATION_COMPLETE", 10_000);
+      await session.sendText(`/export ${exportPath}`);
+      await session.waitForText("Exported session to", 5_000);
+
+      expect(existsSync(exportPath)).toBe(true);
+      const html = readFileSync(exportPath, "utf8");
+      expect(html).toContain("<!DOCTYPE html>");
+      expect(html).toContain("Hello from export test");
+      expect(html).toContain("EXPORT_CONVERSATION_COMPLETE");
+      expect(html).toContain("<style>");
+
+      await session.sendText("/quit");
+      expect(await session.waitForSessionEnd(5_000)).toBe(true);
+      session = null;
+      fakeGateway.stop();
     },
     TIMEOUT,
   );
