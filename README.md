@@ -135,9 +135,16 @@ Run `/dump` to copy the full model-facing context (system prompt, model configur
 - `Ctrl+O`: Open the full transcript review screen. Switch between Review and Full detail with `←`/`→`, scroll with `PgUp`/`PgDn` or mouse wheel, search with `/` (`n`/`N` jump to next/previous match), and press `Esc` to close search or exit.
 - `Ctrl+R`: Interactive prompt history search in the composer. Filter past entries incrementally, navigate matches with `Up`/`Down` or `Ctrl+R`, press `Enter` to recall into the composer without submitting, or press `Esc` to restore the draft.
 - `Alt+E`: Open the current composer draft in `$VISUAL` or `$EDITOR`. On editor exit, replaces the draft with the edited contents.
-- `Ctrl+X`: Open the subagent manager to view, pause, or resume parallel background agents.
+- `Ctrl+X`: Open the subagent manager to view, monitor, pause, or resume parallel background agents.
 - `Ctrl+G`: Reload into a downloaded update when ready.
 
+## Subagent manager
+
+Press `Ctrl+X` to open the subagent manager and inspect live and archived parallel agents.
+
+- **Roster overview**: Roster rows display live status alongside compact resource metrics (cumulative token count, estimated USD spend, and elapsed time since last activity). On narrow terminal widths, trailing metrics truncate gracefully without line wrapping. Missing metrics render with em-dash (`—`) placeholders.
+- **Aggregate header**: The header aggregates cumulative token usage and estimated spend across all active child agents.
+- **Detailed metrics**: Inspecting an individual child reveals its full resource block, including cumulative input and output tokens, estimated cost in USD, total request and turn counts, tool-call count, model context-window fill percentage, and last activity timestamp.
 Run `/hotkeys` to see every active shortcut and its binding status. Customize keybindings in `~/.afx/keybindings.json`:
 
 ```json
