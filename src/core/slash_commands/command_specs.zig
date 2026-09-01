@@ -208,7 +208,6 @@ pub const SlashSpec = struct {
     has_args: bool = false,
     accepts_payload: bool = false,
     requires_prompt_credential: bool = false,
-
 };
 
 pub const SlashRegistry = mod_registry.CommandRegistry(SlashSpec);
