@@ -1809,13 +1809,16 @@ tmuxTest(
   async () => {
     const active = await startFx(80, 24, true, false, 2);
     await active.sendText("FIRST_QUERY_ALPHA");
-    await active.waitForText("history prompt complete", READY_TIMEOUT);
-    await active.waitForComposer(READY_TIMEOUT);
+    await active.waitForPane(
+      (pane) => gateway?.requests.length === 1 && pane.includes("history prompt complete") && hasEmptyComposer(pane),
+      READY_TIMEOUT,
+    );
 
     await active.sendText("SECOND_QUERY_BETA");
-    await active.waitForText("history prompt complete", READY_TIMEOUT);
-    await active.waitForComposer(READY_TIMEOUT);
-
+    await active.waitForPane(
+      (pane) => gateway?.requests.length === 2 && hasEmptyComposer(pane) && !pane.includes("Thinking"),
+      READY_TIMEOUT,
+    );
     // Type a draft
     await typeLiteral(active, "unsubmitted draft");
     await active.waitForPane((pane) => pane.includes("unsubmitted draft"), READY_TIMEOUT);
