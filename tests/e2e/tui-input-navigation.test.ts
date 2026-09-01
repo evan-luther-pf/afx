@@ -1818,9 +1818,9 @@ tmuxTest(
     await active.sendHexBytes(["12"]);
     await active.waitForPane((pane) => pane.includes("zz-history"), READY_TIMEOUT);
 
-    // Filter for "zz"
+    // Filter for "zz" and wait for query in composer
     await typeLiteral(active, "zz");
-    await active.waitForPane((pane) => pane.includes("zz-history"), READY_TIMEOUT);
+    await active.waitForPane((pane) => pane.includes("┃ zz"), READY_TIMEOUT);
 
     // Press Enter to select
     await active.sendKeys("Enter");
@@ -1830,6 +1830,7 @@ tmuxTest(
     await active.sendHexBytes(["12"]);
     await active.waitForPane((pane) => pane.includes("zz-history"), READY_TIMEOUT);
     await typeLiteral(active, "something_else");
+    await active.waitForPane((pane) => pane.includes("┃ something_else"), READY_TIMEOUT);
     await active.sendKeys("Escape");
     await active.waitForPane((pane) => pane.includes("┃ zz-history"), READY_TIMEOUT);
   },
