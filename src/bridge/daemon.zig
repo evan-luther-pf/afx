@@ -13,6 +13,7 @@ const Decision = connector_mod.Decision;
 const EventSink = connector_mod.EventSink;
 const slack_mod = @import("connectors/slack.zig");
 const telegram_mod = @import("connectors/telegram.zig");
+const imsg_mod = @import("connectors/imsg.zig");
 const config_mod = @import("config.zig");
 const BridgeConfig = config_mod.BridgeConfig;
 const runtime_mod = @import("runtime.zig");
@@ -629,12 +630,13 @@ pub fn handleBridgeCli(
 
         var fake_conn: ?*FakeLineConnector = null;
         defer if (fake_conn) |fc| fc.deinit();
-
         var slack_conn: ?*slack_mod.SlackConnector = null;
         defer if (slack_conn) |sc| sc.deinit();
 
         var telegram_conn: ?*telegram_mod.TelegramConnector = null;
         defer if (telegram_conn) |tc| tc.deinit();
+        var imsg_conn: ?*imsg_mod.ImsgConnector = null;
+        defer if (imsg_conn) |ic| ic.deinit();
 
         if (use_fake) {
             var can_start_fake = true;
@@ -681,6 +683,33 @@ pub fn handleBridgeCli(
                         );
                         try connector_list.append(alloc, telegram_conn.?.connector());
                     } else |_| {}
+
+            if (only_connector == null or std.mem.eql(u8, only_connector.?, "imsg")) {
+                if (bridge_config.connectors.imsg) |imsg_cfg| {
+                    if (comptime builtin.os.tag == .macos) {
+                        var can_start_imsg = true;
+                        if (imsg_cfg.disabled_no_allowlist and !hasActivePairingFile(alloc, paths, "imsg")) {
+                            can_start_imsg = false;
+                        }
+                        if (can_start_imsg) {
+                            imsg_conn = try imsg_mod.ImsgConnector.init(
+                                alloc,
+                                io_mod.getIo(),
+                                "imsg",
+                                imsg_cfg,
+                                paths.store_file,
+                            );
+                            try connector_list.append(alloc, imsg_conn.?.connector());
+                        } else {
+                            try deps.writeStderr("Connector 'imsg' is disabled: allowlist is empty and no active pairing code exists. Run 'afx bridge pair imsg' first.\n");
+                            return .handled_failure;
+                        }
+                    } else {
+                        if (only_connector != null and std.mem.eql(u8, only_connector.?, "imsg")) {
+                            try deps.writeStderr("Connector 'imsg' is only supported on macOS.\n");
+                            return .handled_failure;
+                        }
+                    }
                 }
             }
         }

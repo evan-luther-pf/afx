@@ -238,6 +238,12 @@ Bridge settings live in `~/.afx/bridge.json` (mode 0600):
       "token_env": "TELEGRAM_BOT_TOKEN",
       "allow_users": [123456789],
       "groups": "mention"
+    },
+    "imsg": {
+      "allow_handles": ["+15551234567", "user@example.com"],
+      "poll_interval_ms": 2000,
+      "db_path": "~/Library/Messages/chat.db",
+      "group_prefix": "@afx"
     }
   }
 }
@@ -250,6 +256,31 @@ Bridge settings live in `~/.afx/bridge.json` (mode 0600):
 3. Add authorized Telegram user IDs to `allow_users` (or run `afx bridge pair telegram` to authenticate via direct message pairing code).
 4. Group messages require `@<botusername>` mention or direct reply to the bot when `groups` is set to `"mention"`.
 5. Forum topics (message thread IDs) are automatically mapped and preserved per topic.
+
+### iMessage setup (macOS)
+
+The iMessage bridge connects to local Messages via read-only SQLite polling of `chat.db` and AppleScript dispatch.
+
+#### Required permissions
+
+1. **Full Disk Access**: Grant Full Disk Access in *System Settings > Privacy & Security > Full Disk Access* to your terminal emulator or AFX binary so it can read `~/Library/Messages/chat.db`.
+2. **Automation**: Allow AFX/Terminal to control `Messages.app` when prompted by macOS Automation security dialogs (or enable under *System Settings > Privacy & Security > Automation*).
+
+#### Configuration
+
+Add an `imsg` connector block under `connectors` in `~/.afx/bridge.json`:
+
+- `allow_handles`: required allowlist of sender phone numbers or email addresses. Phone numbers and emails are normalized by stripping spaces, dashes, and parentheses.
+- `poll_interval_ms`: polling interval in milliseconds (default: 2000).
+- `db_path`: path to Messages `chat.db` (default: `~/Library/Messages/chat.db`).
+- `group_prefix`: prefix required for group messages (default: `@afx`). Group chats whose GUID starts with `iMessage;+;` only trigger responses when the inbound message begins with this prefix.
+
+#### Limitations
+
+- **macOS only**: requires macOS Messages database and AppleScript automation.
+- **Existing chats only**: AFX replies within existing chat threads (`to chat id <guid>`). Initiating new conversations to arbitrary handles without an established chat is out of scope.
+- **Typedstream text extraction**: extracting text from rich `attributedBody` blobs uses a best-effort typedstream heuristic for NSString payloads; messages with complex attachments may not decode text if the raw `text` field is null.
+- **No rich controls**: iMessage does not support interactive buttons or message edits. Tool approval requests send numbered text prompts (reply `1` to allow once, `2` to allow for session, `3` to deny).
 ## Updates
 
 afx checks [GitHub Releases](https://github.com/evan-luther-pf/afx/releases) for new versions. When an update is ready, press `Ctrl+G` to reload into it.
@@ -263,15 +294,43 @@ afx upgrade --channel dev
 Stable updates follow versioned GitHub releases. The optional development channel follows the moving `dev` prerelease.
 
 ## Documentation
+⚠ 2 unresolved conflicts detected
+- ours = HEAD
+- theirs = 3f52b90 (Add iMessage bridge connector and typedstream extractor)
+NOTICE: Inspect a block by reading `conflict://<N>` (add `/ours` / `/theirs` / `/base` to render a single side). Resolve with `write({ path: "conflict://<N>", content })`, or bulk-resolve every registered conflict with `write({ path: "conflict://*", content })`. Writes replace ONLY the marker block (markers + all sides) — never repeat the lines before/after it; they stay in place.
+`content` shorthand: a line that is exactly `@ours` / `@theirs` / `@base` / `@both` expands to that recorded section. `@both` is ours-then-theirs with no separator — only for additive conflicts where each side adds something different; NEVER for competing edits of the same lines (pick a side or write the combined text). Lines that are not a token pass through verbatim, so `"// keep both\n@ours\n@theirs"` literally writes the comment, then ours, then theirs.
+Per-id bulk: `write({ path: "conflict://*", content: "1: @ours\n2: @theirs\n…" })` resolves each listed id with that side in ONE call — the cheapest way through many pick-one conflicts; unlisted ids stay registered.
+Resolve each block faithfully: keep one side (`@ours`/`@theirs`), or combine them when both intents apply — never invent content beyond the recorded sides, and never stack both sides of competing edits. Resolve several conflicts in a single turn by issuing multiple `write` calls at once; ids stay valid as earlier blocks are resolved.
 
-Read the [plain HTML documentation](https://evan-luther-pf.github.io/afx/) for setup, providers, permissions, sessions, tools, agents, updates, and project configuration.
+──── #1  L237-248 ────
+<<< ours
+    "telegram": {
+      "token_env": "TELEGRAM_BOT_TOKEN",
+      "allow_users": [123456789],
+      "groups": "mention"
+>>> theirs
+    "imsg": {
+      "allow_handles": ["+15551234567", "user@example.com"],
+      "poll_interval_ms": 2000,
+      "db_path": "~/Library/Messages/chat.db",
+      "group_prefix": "@afx"
 
-Contributor and implementation details remain in [CONTRIBUTING.md](CONTRIBUTING.md).
+──── #2  L254-287 ────
+<<< ours
+#### Telegram connector
 
-## Lineage
+1. Create a bot using [@BotFather](https://t.me/botfather) on Telegram and copy the API token.
+2. Set the token environment variable named in `token_env` (e.g. `export TELEGRAM_BOT_TOKEN="123456:ABC-DEF..."`).
+3. Add authorized Telegram user IDs to `allow_users` (or run `afx bridge pair telegram` to authenticate via direct message pairing code).
+4. Group messages require `@<botusername>` mention or direct reply to the bot when `groups` is set to `"mention"`.
+… (1 more line)
+>>> theirs
+### iMessage setup (macOS)
 
-afx takes interface inspiration from [Pi](https://github.com/badlogic/pi-mono) and [Oh My Pi](https://github.com/can1357/oh-my-pi). See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for included notices.
+The iMessage bridge connects to local Messages via read-only SQLite polling of `chat.db` and AppleScript dispatch.
 
-## License
+#### Required permissions
 
-[Apache-2.0](LICENSE)
+… (18 more lines)
+
+[Showing lines 1-300 of 313. Use :301 to continue]

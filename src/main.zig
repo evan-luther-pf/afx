@@ -4417,6 +4417,8 @@ test {
     _ = @import("bridge/connectors/slack_api.zig");
     _ = @import("bridge/connectors/slack.zig");
     _ = @import("bridge/connectors/telegram.zig");
+    _ = @import("bridge/connectors/typedstream.zig");
+    _ = @import("bridge/connectors/imsg.zig");
     _ = @import("bridge/router.zig");
     _ = @import("bridge/commands.zig");
     _ = @import("bridge/runtime.zig");
