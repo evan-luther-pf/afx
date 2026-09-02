@@ -1,13 +1,12 @@
-name: Full CI
+name: Main Shards
 
 on:
-  workflow_dispatch:
   push:
-    branches-ignore:
+    branches:
       - main
 
 concurrency:
-  group: full-ci-${{ github.ref }}
+  group: main-shards-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -16,22 +15,9 @@ permissions:
 
 jobs:
   native:
-    name: Native checks (${{ matrix.optimize }}, ${{ matrix.platform.name }})
-    runs-on: ${{ matrix.platform.runner }}
+    name: Native checks (ReleaseSafe, linux-x86_64)
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      matrix:
-        platform:
-          - name: linux-x86_64
-            runner: ubuntu-24.04
-          - name: linux-aarch64
-            runner: ubuntu-24.04-arm
-          - name: macos-x86_64
-            runner: macos-15-intel
-          - name: macos-aarch64
-            runner: macos-15
-        optimize: [ReleaseSafe]
     env:
       AI_GATEWAY_API_KEY: ""
       VERCEL_OIDC_TOKEN: ""
@@ -63,16 +49,16 @@ jobs:
         shell: bash
         run: |
           started_at=$SECONDS
-          printf "Starting build (%s)...\n" "${{ matrix.optimize }}"
-          zig build -Doptimize=${{ matrix.optimize }}
+          printf "Starting build (ReleaseSafe)...\n"
+          zig build -Doptimize=ReleaseSafe
           printf "Build completed in %ss\n" "$((SECONDS - started_at))"
 
       - name: Run unit tests
         shell: bash
         run: |
           started_at=$SECONDS
-          printf "Starting unit tests (%s)...\n" "${{ matrix.optimize }}"
-          zig build test -Doptimize=${{ matrix.optimize }}
+          printf "Starting unit tests (ReleaseSafe)...\n"
+          zig build test -Doptimize=ReleaseSafe
           printf "Unit tests completed in %ss\n" "$((SECONDS - started_at))"
 
       - name: Smoke test fresh binary
@@ -93,26 +79,12 @@ jobs:
           test ! -s "$status_stderr"
 
   e2e:
-    name: E2E (${{ matrix.optimize }}, ${{ matrix.platform.name }}, shard ${{ matrix.shard.label }})
-    runs-on: ${{ matrix.platform.runner }}
+    name: E2E (ReleaseSafe, linux-x86_64, shard ${{ matrix.shard.label }})
+    runs-on: ubuntu-24.04
     timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
-        platform:
-          - name: linux-x86_64
-            runner: ubuntu-24.04
-            zig_tarball: zig-x86_64-linux
-          - name: linux-aarch64
-            runner: ubuntu-24.04-arm
-            zig_tarball: zig-aarch64-linux
-          - name: macos-x86_64
-            runner: macos-15-intel
-            zig_tarball: zig-x86_64-macos
-          - name: macos-aarch64
-            runner: macos-15
-            zig_tarball: zig-aarch64-macos
-        optimize: [ReleaseSafe]
         shard:
           - index: 0
             shard_count: 6
@@ -159,7 +131,7 @@ jobs:
             ${{ runner.os }}-${{ runner.arch }}-zig-0.16.0-
 
       - name: Build
-        run: zig build -Doptimize=${{ matrix.optimize }}
+        run: zig build -Doptimize=ReleaseSafe
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -170,43 +142,36 @@ jobs:
         shell: bash
         timeout-minutes: 17
         run: |
-          if [ "$RUNNER_OS" = "Linux" ]; then
-            missing=()
-            command -v tmux >/dev/null 2>&1 || missing+=(tmux)
-            command -v zsh >/dev/null 2>&1 || missing+=(zsh)
-            if [ "${#missing[@]}" -gt 0 ]; then
-              retry() {
-                local attempt
-                for attempt in 1 2; do
-                  if "$@"; then
-                    return 0
-                  fi
-                  if [ "$attempt" -lt 2 ]; then
-                    printf 'Dependency install attempt %s failed; retrying in 5s\n' "$attempt" >&2
-                    sleep 5
-                  fi
-                done
-                return 1
-              }
-              # The Azure mirror can stall after APT has already fetched release
-              # metadata from the direct Ubuntu fallback. Prefer that fallback
-              # for the whole update when the runner's mirror list provides it.
-              if [ -f /etc/apt/apt-mirrors.txt ] &&
-                grep -Eq '^https?://(archive|ports)\.ubuntu\.com/' /etc/apt/apt-mirrors.txt
-              then
-                sudo sed -i '/:\/\/azure\..*ubuntu\.com\//d' /etc/apt/apt-mirrors.txt
-              fi
-              retry sudo timeout --kill-after=15s 4m apt-get \
-                -o Acquire::Retries=3 \
-                -o Acquire::http::Timeout=30 \
-                -o Acquire::https::Timeout=30 \
-                update
-              retry sudo timeout --kill-after=15s 3m apt-get \
-                -o Dpkg::Use-Pty=0 \
-                install -y "${missing[@]}"
+          missing=()
+          command -v tmux >/dev/null 2>&1 || missing+=(tmux)
+          command -v zsh >/dev/null 2>&1 || missing+=(zsh)
+          if [ "${#missing[@]}" -gt 0 ]; then
+            retry() {
+              local attempt
+              for attempt in 1 2; do
+                if "$@"; then
+                  return 0
+                fi
+                if [ "$attempt" -lt 2 ]; then
+                  printf 'Dependency install attempt %s failed; retrying in 5s\n' "$attempt" >&2
+                  sleep 5
+                fi
+              done
+              return 1
+            }
+            if [ -f /etc/apt/apt-mirrors.txt ] &&
+              grep -Eq '^https?://(archive|ports)\.ubuntu\.com/' /etc/apt/apt-mirrors.txt
+            then
+              sudo sed -i '/:\/\/azure\..*ubuntu\.com\//d' /etc/apt/apt-mirrors.txt
             fi
-          elif ! command -v tmux >/dev/null 2>&1; then
-            brew install tmux
+            retry sudo timeout --kill-after=15s 4m apt-get \
+              -o Acquire::Retries=3 \
+              -o Acquire::http::Timeout=30 \
+              -o Acquire::https::Timeout=30 \
+              update
+            retry sudo timeout --kill-after=15s 3m apt-get \
+              -o Dpkg::Use-Pty=0 \
+              install -y "${missing[@]}"
           fi
           printf 'set-option -g history-limit 100000\n' > "$HOME/.tmux.conf"
           tmux -V
@@ -251,26 +216,18 @@ jobs:
           exit "$shard_status"
 
   full-suite:
-    name: Full suite (${{ matrix.name }})
+    name: Full suite (linux-x86_64)
     if: ${{ always() }}
     needs:
       - native
       - e2e
     runs-on: ubuntu-24.04
     timeout-minutes: 5
-    strategy:
-      fail-fast: false
-      matrix:
-        name:
-          - linux-x86_64
-          - linux-aarch64
-          - macos-x86_64
-          - macos-aarch64
     steps:
       - name: Verify native and E2E matrices
         env:
           GH_TOKEN: ${{ github.token }}
-          TARGET: ${{ matrix.name }}
+          TARGET: linux-x86_64
         run: |
           jobs="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs?per_page=100")"
           jq -e --arg target "$TARGET" '
