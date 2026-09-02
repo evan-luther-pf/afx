@@ -1044,7 +1044,9 @@ test "telegram: cursor persistence with store" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const store_path = try io_mod.dirRealpathAlloc(alloc, tmp.dir, "test_store.json");
+    const tmp_path = try io_mod.dirRealpathAlloc(alloc, tmp.dir, ".");
+    defer alloc.free(tmp_path);
+    const store_path = try std.fs.path.join(alloc, &.{ tmp_path, "test_store.json" });
     defer alloc.free(store_path);
 
     var store = try Store.load(alloc, store_path);
