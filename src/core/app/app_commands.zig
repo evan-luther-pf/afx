@@ -4245,6 +4245,15 @@ const ClipboardCommandFakeApp = struct {
     last_tone: ?types.NoticeTone = null,
     last_body: ?[]const u8 = null,
 
+    // Command handlers hand out arena-owned text that dies when they return;
+    // the fake owns copies so assertions never read freed memory.
+    fn deinit(self: *ClipboardCommandFakeApp) void {
+        if (self.copied_text) |t| std.testing.allocator.free(t);
+        if (self.last_body) |b| std.testing.allocator.free(b);
+        self.copied_text = null;
+        self.last_body = null;
+    }
+
     pub fn clipboard(self: *ClipboardCommandFakeApp) host.Clipboard {
         return .{
             .context = self,
@@ -4255,7 +4264,8 @@ const ClipboardCommandFakeApp = struct {
     fn copy(raw_context: ?*anyopaque, text: []const u8) host.ClipboardError!bool {
         const self: *ClipboardCommandFakeApp = @ptrCast(@alignCast(raw_context.?));
         self.copy_calls += 1;
-        self.copied_text = text;
+        if (self.copied_text) |old| std.testing.allocator.free(old);
+        self.copied_text = std.testing.allocator.dupe(u8, text) catch return error.CopyFailed;
         return switch (self.copy_outcome) {
             .copied => true,
             .unavailable => false,
@@ -4270,7 +4280,8 @@ const ClipboardCommandFakeApp = struct {
     ) !void {
         self.last_topic = notice.topic;
         self.last_tone = notice.tone;
-        self.last_body = notice.body;
+        if (self.last_body) |old| std.testing.allocator.free(old);
+        self.last_body = try std.testing.allocator.dupe(u8, notice.body);
     }
 };
 
@@ -4633,6 +4644,7 @@ test "copy command routes exact reply bytes through the host clipboard" {
     var app = ClipboardCommandFakeApp{
         .session = .{ .reply = "reply\nwith exact bytes" },
     };
+    defer app.deinit();
 
     try Handlers(ClipboardCommandFakeApp).commandCopyLast(@ptrCast(&app));
 
@@ -4645,6 +4657,7 @@ test "copy command routes exact reply bytes through the host clipboard" {
 
 test "copy command reports missing replies and host failures" {
     var app = ClipboardCommandFakeApp{};
+    defer app.deinit();
 
     try Handlers(ClipboardCommandFakeApp).commandCopyLast(@ptrCast(&app));
     try std.testing.expectEqual(@as(usize, 0), app.copy_calls);
@@ -4655,6 +4668,7 @@ test "copy command reports missing replies and host failures" {
     for ([_]ClipboardCommandFakeApp.CopyOutcome{ .unavailable, .failed }) |outcome| {
         app.copy_outcome = outcome;
         app.last_tone = null;
+        if (app.last_body) |old| std.testing.allocator.free(old);
         app.last_body = null;
 
         try Handlers(ClipboardCommandFakeApp).commandCopyLast(@ptrCast(&app));
@@ -4667,6 +4681,7 @@ test "copy command reports missing replies and host failures" {
 
 test "dump command reports missing history on empty session" {
     var app = ClipboardCommandFakeApp{};
+    defer app.deinit();
 
     try Handlers(ClipboardCommandFakeApp).commandDump(@ptrCast(&app));
 
@@ -4679,6 +4694,7 @@ test "dump command reports missing history on empty session" {
 test "dump command formats model context and copies to clipboard with sidecar" {
     const alloc = std.testing.allocator;
     var app = ClipboardCommandFakeApp{};
+    defer app.deinit();
     try app.session.history.append(alloc, .{ .assistant = .{
         .user = .{ .text = @constCast("Explain the codebase") },
         .assistant = @constCast("Here is an explanation."),
@@ -4702,6 +4718,7 @@ test "dump command formats model context and copies to clipboard with sidecar" {
 
 test "export command reports missing history on empty session" {
     var app = ClipboardCommandFakeApp{};
+    defer app.deinit();
 
     try Handlers(ClipboardCommandFakeApp).commandExport(@ptrCast(&app), "");
 
@@ -4712,6 +4729,7 @@ test "export command reports missing history on empty session" {
 
 test "export command rejects --copy and points to dump" {
     var app = ClipboardCommandFakeApp{};
+    defer app.deinit();
 
     try Handlers(ClipboardCommandFakeApp).commandExport(@ptrCast(&app), "--copy");
 
@@ -4726,6 +4744,7 @@ test "export command writes HTML file and reports path on non-empty session" {
     defer tmp.cleanup();
 
     var app = ClipboardCommandFakeApp{};
+    defer app.deinit();
     try app.session.history.append(alloc, .{ .assistant = .{
         .user = .{ .text = @constCast("Hello world") },
         .assistant = @constCast("Hi there"),
