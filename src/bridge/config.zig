@@ -40,11 +40,16 @@ pub const ImsgConfig = struct {
     allow_handles: []const []const u8,
     disabled_no_allowlist: bool = false,
 };
+pub const FakeConfig = struct {
+    allow_users: []const []const u8,
+    disabled_no_allowlist: bool = false,
+};
 
 pub const ConnectorsConfig = struct {
     slack: ?SlackConfig = null,
     telegram: ?TelegramConfig = null,
     imsg: ?ImsgConfig = null,
+    fake: ?FakeConfig = null,
 };
 
 pub const BridgeConfig = struct {
@@ -305,6 +310,29 @@ pub fn parse(alloc: std.mem.Allocator, value: std.json.Value) !BridgeConfig {
                     .disabled_no_allowlist = disabled,
                 };
             } else if (i_val != .null) return error.InvalidBridgeConfigJson;
+        }
+
+        // fake
+        if (conns.get("fake")) |f_val| {
+            if (f_val == .object) {
+                const f_obj = f_val.object;
+                var allow_users: std.ArrayListUnmanaged([]const u8) = .empty;
+                if (f_obj.get("allow_users")) |users_val| {
+                    if (users_val != .array) return error.InvalidBridgeConfigJson;
+                    for (users_val.array.items) |u_item| {
+                        if (u_item != .string) return error.InvalidBridgeConfigJson;
+                        try allow_users.append(arena_alloc, try arena_alloc.dupe(u8, u_item.string));
+                    }
+                }
+
+                const users_slice = try allow_users.toOwnedSlice(arena_alloc);
+                const disabled = (users_slice.len == 0);
+
+                config.connectors.fake = .{
+                    .allow_users = users_slice,
+                    .disabled_no_allowlist = disabled,
+                };
+            } else if (f_val != .null) return error.InvalidBridgeConfigJson;
         }
     }
 

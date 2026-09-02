@@ -360,7 +360,27 @@ fn isProcessAlive(pid: i32) bool {
     }
     return false;
 }
+fn hasActivePairingFile(alloc: std.mem.Allocator, paths: DaemonPaths, connector_name: []const u8) bool {
+    var file = std.Io.Dir.cwd().openFile(io_mod.getIo(), paths.pairing_file, .{}) catch return false;
+    defer file.close(io_mod.getIo());
 
+    var read_buf: [4096]u8 = undefined;
+    var r = file.reader(io_mod.getIo(), &read_buf);
+    const bytes = r.interface.allocRemaining(alloc, std.Io.Limit.limited(64 * 1024)) catch return false;
+    defer alloc.free(bytes);
+
+    const parsed = std.json.parseFromSlice(std.json.Value, alloc, bytes, .{}) catch return false;
+    defer parsed.deinit();
+
+    if (parsed.value != .object) return false;
+    const obj = parsed.value.object;
+    const conn_val = obj.get("connector") orelse return false;
+    const exp_val = obj.get("expires_ms") orelse return false;
+    if (conn_val != .string or exp_val != .integer) return false;
+    if (!std.mem.eql(u8, conn_val.string, connector_name)) return false;
+
+    return io_mod.milliTimestamp() <= exp_val.integer;
+}
 pub const CliResult = union(enum) {
     handled_success,
     handled_failure,
@@ -613,8 +633,19 @@ pub fn handleBridgeCli(
         defer if (slack_conn) |sc| sc.deinit();
 
         if (use_fake) {
-            fake_conn = try FakeLineConnector.init(alloc, "fake", fake_script);
-            try connector_list.append(alloc, fake_conn.?.connector());
+            var can_start_fake = true;
+            if (bridge_config.connectors.fake) |fake_cfg| {
+                if (fake_cfg.disabled_no_allowlist and !hasActivePairingFile(alloc, paths, "fake")) {
+                    can_start_fake = false;
+                }
+            }
+            if (can_start_fake) {
+                fake_conn = try FakeLineConnector.init(alloc, "fake", fake_script);
+                try connector_list.append(alloc, fake_conn.?.connector());
+            } else {
+                try deps.writeStderr("Connector 'fake' is disabled: allowlist is empty and no active pairing code exists. Run 'afx bridge pair fake' first.\n");
+                return .handled_failure;
+            }
         } else if (only_connector == null or std.mem.eql(u8, only_connector.?, "slack")) {
             if (bridge_config.connectors.slack) |slack_cfg| {
                 if (config_mod.resolveSlackTokens(slack_cfg, io_mod.getenv)) |tokens| {
@@ -633,7 +664,12 @@ pub fn handleBridgeCli(
         }
 
         if (connector_list.items.len == 0) {
-            // Default to fake connector if none configured
+            // If explicit connector was requested or configured, fail
+            if (only_connector != null or bridge_config.connectors.fake != null or bridge_config.connectors.slack != null or bridge_config.connectors.telegram != null or bridge_config.connectors.imsg != null) {
+                try deps.writeStderr("No enabled connectors found. Check bridge.json or run 'afx bridge pair <connector>' to authorize users.\n");
+                return .handled_failure;
+            }
+            // Default to fake connector if none configured at all
             fake_conn = try FakeLineConnector.init(alloc, "fake", null);
             try connector_list.append(alloc, fake_conn.?.connector());
         }

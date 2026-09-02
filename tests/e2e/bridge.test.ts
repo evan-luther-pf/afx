@@ -118,7 +118,7 @@ type TestContext = {
   bridge: BridgeProcess | null;
 };
 
-function setupTestContext(approvalTimeoutS = 600): TestContext {
+function setupTestContext(approvalTimeoutS = 600, allowUsers?: string[]): TestContext {
   const root = mkdtempSync(join(tmpdir(), "afx-bridge-e2e-"));
   const home = join(root, "home");
   const workspace = join(root, "workspace");
@@ -126,7 +126,19 @@ function setupTestContext(approvalTimeoutS = 600): TestContext {
   mkdirSync(join(home, ".afx", "bridge"), { recursive: true });
   mkdirSync(workspace, { recursive: true });
 
-  const bridgeConfig = {
+  const bridgeConfig: {
+    bridge: {
+      workspace: string;
+      permission_mode: string;
+      approval_timeout_s: number;
+      max_concurrent_sessions: number;
+      connectors?: {
+        fake?: {
+          allow_users: string[];
+        };
+      };
+    };
+  } = {
     bridge: {
       workspace: workspace,
       permission_mode: "ask",
@@ -134,6 +146,13 @@ function setupTestContext(approvalTimeoutS = 600): TestContext {
       max_concurrent_sessions: 4,
     },
   };
+  if (allowUsers !== undefined) {
+    bridgeConfig.bridge.connectors = {
+      fake: {
+        allow_users: allowUsers,
+      },
+    };
+  }
   writeFileSync(join(home, ".afx", "bridge.json"), JSON.stringify(bridgeConfig, null, 2), {
     mode: 0o600,
   });
@@ -183,6 +202,7 @@ describe("afx bridge (fake connector)", () => {
       ctx = null;
     }
   });
+
   test("inbound MSG produces model reply via SEND and final EDIT", async () => {
     ctx = setupTestContext();
     const gateway = startFakeGateway([fakeGatewayFinalText("Hello from bridge agent!")]);
@@ -218,6 +238,7 @@ describe("afx bridge (fake connector)", () => {
       fakeGatewayFinalText("Command execution completed successfully."),
     ]);
     ctx.gateway = gateway;
+
     const bridge = spawnBridge(ctx, gateway);
     await bridge.waitForStdoutLine((line) => line.includes("Bridge daemon started"));
 
@@ -294,7 +315,6 @@ describe("afx bridge (fake connector)", () => {
     bridge.writeLine("MSG test_chat test_user /new");
     const newLine = await bridge.waitForStdoutLine((line) => line.startsWith("SEND test_chat ") && line.includes("Started new session:"));
     expect(newLine).toContain("Started new session:");
-
     // Unknown command /foo
     bridge.writeLine("MSG test_chat test_user /foo");
     const unknownLine = await bridge.waitForStdoutLine((line) => line.startsWith("SEND test_chat ") && line.includes("Unknown command '/foo'"));
@@ -357,5 +377,91 @@ describe("afx bridge (fake connector)", () => {
     expect(savedJson.connector).toBe("fake");
     expect(savedJson.code).toBe(code);
     expect(typeof savedJson.expires_ms).toBe("number");
+  }, TIMEOUT);
+
+  test("unauthorized user message produces no SEND within 2s and daemon stays alive", async () => {
+    ctx = setupTestContext(600, ["authorized_alice"]);
+    const gateway = startFakeGateway([fakeGatewayFinalText("Should not be delivered")]);
+    ctx.gateway = gateway;
+
+    const bridge = spawnBridge(ctx, gateway);
+    await bridge.waitForStdoutLine((line) => line.includes("Bridge daemon started"));
+
+    bridge.writeLine("MSG test_chat intruder_eve Hello");
+
+    const sendEmitted = await Promise.race([
+      bridge.waitForStdoutLine((line) => line.startsWith("SEND test_chat "), 2000).then(() => true, () => false),
+      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 2000)),
+    ]);
+    expect(sendEmitted).toBe(false);
+    expect(bridge.proc.exitCode).toBeNull();
+  }, TIMEOUT);
+
+  test("pairing: unknown user pairs with code -> confirmation SEND -> bridge.json updated -> follow-up MSG succeeds", async () => {
+    ctx = setupTestContext(600, ["authorized_alice"]);
+    const gateway = startFakeGateway([fakeGatewayFinalText("Follow-up answer for new user.")]);
+    ctx.gateway = gateway;
+
+    const bridge = spawnBridge(ctx, gateway);
+    await bridge.waitForStdoutLine((line) => line.includes("Bridge daemon started"));
+
+    // Generate pairing code via CLI
+    const pairResult = await runFx(["bridge", "pair", "fake"], {
+      env: { HOME: ctx.home },
+    });
+    expect(pairResult.code).toBe(0);
+    const match = pairResult.stdout.match(/Pairing code for fake: (\d{6})/);
+    expect(match).not.toBeNull();
+    const code = match![1];
+
+    // Send code as DM from unknown user
+    bridge.writeLine(`MSG test_chat unknown_bob ${code}`);
+    const confirmLine = await bridge.waitForStdoutLine((line) => line.startsWith("SEND test_chat ") && line.includes("Pairing successful"));
+    expect(confirmLine).toContain("authorized");
+
+    // Verify bridge.json now lists unknown_bob
+    const savedConfig = JSON.parse(readFileSync(join(ctx.home, ".afx", "bridge.json"), "utf-8"));
+    const fakeAllowList: string[] = savedConfig.bridge?.connectors?.fake?.allow_users ?? [];
+    expect(fakeAllowList).toContain("unknown_bob");
+
+    // Follow-up message from unknown_bob now succeeds normally
+    bridge.writeLine("MSG test_chat unknown_bob Hello assistant");
+    const replyLine = await bridge.waitForStdoutLine((line) => line.startsWith("SEND test_chat ") && line.includes("Follow-up answer"));
+    expect(replyLine).toContain("Follow-up answer for new user.");
+  }, TIMEOUT);
+
+  test("empty allow_users refuses to start fake connector unless pairing code is active", async () => {
+    ctx = setupTestContext(600, []);
+    const gateway = startFakeGateway([]);
+    ctx.gateway = gateway;
+
+    // 1. Attempt start with empty allowlist and no pairing code -> fails
+    const failProc = Bun.spawn([FX_BIN, "bridge", "start", "--connector", "fake"], {
+      cwd: ctx.workspace,
+      env: {
+        ...process.env,
+        HOME: ctx.home,
+        FX_GATEWAY_CHAT_URL: gateway.chatUrl,
+        AI_GATEWAY_API_KEY: "fake-bridge-key",
+      },
+      stdin: "pipe",
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const exitCode = await failProc.exited;
+    expect(exitCode).not.toBe(0);
+    const errText = await new Response(failProc.stderr).text();
+    expect(errText).toContain("disabled: allowlist is empty and no active pairing code exists");
+
+    // 2. Generate pairing code
+    const pairResult = await runFx(["bridge", "pair", "fake"], {
+      env: { HOME: ctx.home },
+    });
+    expect(pairResult.code).toBe(0);
+
+    // 3. Now start succeeds because pairing code is active
+    const bridge = spawnBridge(ctx, gateway);
+    const startLine = await bridge.waitForStdoutLine((line) => line.includes("Bridge daemon started"));
+    expect(startLine).toContain("Bridge daemon started");
   }, TIMEOUT);
 });

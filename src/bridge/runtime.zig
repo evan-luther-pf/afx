@@ -227,6 +227,48 @@ pub const Runtime = struct {
         };
     }
 
+    fn loadPairingFileLocked(self: *Runtime, connector_name: []const u8) ?PairingCode {
+        const home = io_mod.getenv("HOME") orelse return null;
+        var arena = std.heap.ArenaAllocator.init(self.alloc);
+        defer arena.deinit();
+        const alloc = arena.allocator();
+
+        const pairing_path = std.fmt.allocPrint(alloc, "{s}/.afx/bridge/pairing.json", .{home}) catch return null;
+        var file = std.Io.Dir.cwd().openFile(io_mod.getIo(), pairing_path, .{}) catch return null;
+        defer file.close(io_mod.getIo());
+
+        var read_buf: [4096]u8 = undefined;
+        var r = file.reader(io_mod.getIo(), &read_buf);
+        const bytes = r.interface.allocRemaining(alloc, std.Io.Limit.limited(64 * 1024)) catch return null;
+        const parsed = std.json.parseFromSlice(std.json.Value, alloc, bytes, .{}) catch return null;
+        if (parsed.value != .object) return null;
+        const obj = parsed.value.object;
+
+        const conn_val = obj.get("connector") orelse return null;
+        const code_val = obj.get("code") orelse return null;
+        const exp_val = obj.get("expires_ms") orelse return null;
+
+        if (conn_val != .string or code_val != .string or exp_val != .integer) return null;
+        if (!std.mem.eql(u8, conn_val.string, connector_name)) return null;
+
+        const now = io_mod.milliTimestamp();
+        if (now > exp_val.integer) return null;
+        if (code_val.string.len != 6) return null;
+
+        var code_arr: [6]u8 = undefined;
+        @memcpy(&code_arr, code_val.string[0..6]);
+
+        if (self.active_pairing) |p| {
+            self.alloc.free(p.connector);
+        }
+        self.active_pairing = .{
+            .code = code_arr,
+            .connector = self.alloc.dupe(u8, connector_name) catch return null,
+            .expires_ms = exp_val.integer,
+        };
+        return self.active_pairing;
+    }
+
     pub fn hasActivePairingCode(self: *Runtime, connector_name: []const u8) bool {
         self.pairing_mutex.lockUncancelable(io_mod.getIo());
         defer self.pairing_mutex.unlock(io_mod.getIo());
@@ -236,12 +278,79 @@ pub const Runtime = struct {
                 return true;
             }
         }
-        return false;
+        return self.loadPairingFileLocked(connector_name) != null;
+    }
+
+    fn persistAllowUser(self: *Runtime, connector_name: []const u8, user: []const u8) !void {
+        const home = io_mod.getenv("HOME") orelse return;
+        var arena = std.heap.ArenaAllocator.init(self.alloc);
+        defer arena.deinit();
+        const alloc = arena.allocator();
+
+        const config_path = try std.fmt.allocPrint(alloc, "{s}/.afx/bridge.json", .{home});
+        var file = std.Io.Dir.cwd().openFile(io_mod.getIo(), config_path, .{}) catch return;
+        var read_buf: [8192]u8 = undefined;
+        var r = file.reader(io_mod.getIo(), &read_buf);
+        const bytes = r.interface.allocRemaining(alloc, std.Io.Limit.limited(1024 * 1024)) catch {
+            file.close(io_mod.getIo());
+            return;
+        };
+        file.close(io_mod.getIo());
+
+        var parsed = std.json.parseFromSlice(std.json.Value, alloc, bytes, .{}) catch return;
+        defer parsed.deinit();
+
+        if (parsed.value != .object) return;
+        var bridge_obj: *std.json.ObjectMap = &parsed.value.object;
+        if (parsed.value.object.getPtr("bridge")) |b_val| {
+            if (b_val.* == .object) bridge_obj = &b_val.object;
+        }
+
+        if (!bridge_obj.contains("connectors")) {
+            try bridge_obj.put(alloc, "connectors", .{ .object = .empty });
+        }
+        const conns_val = bridge_obj.getPtr("connectors") orelse return;
+        if (conns_val.* != .object) return;
+
+        if (!conns_val.object.contains(connector_name)) {
+            try conns_val.object.put(alloc, connector_name, .{ .object = .empty });
+        }
+        const conn_val = conns_val.object.getPtr(connector_name) orelse return;
+        if (conn_val.* != .object) return;
+
+        if (!conn_val.object.contains("allow_users")) {
+            try conn_val.object.put(alloc, "allow_users", .{ .array = std.json.Array.init(alloc) });
+        }
+        const users_val = conn_val.object.getPtr("allow_users") orelse return;
+        if (users_val.* != .array) return;
+
+        for (users_val.array.items) |item| {
+            if (item == .string and std.mem.eql(u8, item.string, user)) return;
+        }
+
+        try users_val.array.append(.{ .string = try alloc.dupe(u8, user) });
+
+        var out: std.Io.Writer.Allocating = .init(alloc);
+        defer out.deinit();
+        try std.json.Stringify.value(parsed.value, .{ .whitespace = .indent_2 }, &out.writer);
+        const json_out = try out.toOwnedSlice();
+
+        var out_file = try std.Io.Dir.cwd().createFile(io_mod.getIo(), config_path, .{});
+        defer out_file.close(io_mod.getIo());
+        var write_buf: [4096]u8 = undefined;
+        var w = out_file.writer(io_mod.getIo(), &write_buf);
+        try w.interface.writeAll(json_out);
+        try w.interface.writeAll("\n");
+        try w.interface.flush();
     }
 
     fn checkAndApplyPairing(self: *Runtime, connector_name: []const u8, user: []const u8, text: []const u8) !bool {
         self.pairing_mutex.lockUncancelable(io_mod.getIo());
         defer self.pairing_mutex.unlock(io_mod.getIo());
+
+        if (self.active_pairing == null or !std.mem.eql(u8, self.active_pairing.?.connector, connector_name) or io_mod.milliTimestamp() > self.active_pairing.?.expires_ms) {
+            _ = self.loadPairingFileLocked(connector_name);
+        }
 
         const pairing = self.active_pairing orelse return false;
         if (!std.mem.eql(u8, pairing.connector, connector_name)) return false;
@@ -255,8 +364,32 @@ pub const Runtime = struct {
             self.alloc.free(pairing.connector);
             self.active_pairing = null;
 
+            if (io_mod.getenv("HOME")) |home| {
+                const pairing_path = std.fmt.allocPrint(self.alloc, "{s}/.afx/bridge/pairing.json", .{home}) catch null;
+                if (pairing_path) |p| {
+                    defer self.alloc.free(p);
+                    std.Io.Dir.cwd().deleteFile(io_mod.getIo(), p) catch {};
+                }
+            }
+
             // Update in-memory config allowlist
-            if (std.mem.eql(u8, connector_name, "slack")) {
+            if (std.mem.eql(u8, connector_name, "fake")) {
+                if (self.config.connectors.fake) |*f| {
+                    var list: std.ArrayListUnmanaged([]const u8) = .empty;
+                    for (f.allow_users) |u| try list.append(self.alloc, u);
+                    try list.append(self.alloc, try self.alloc.dupe(u8, user));
+                    f.allow_users = try list.toOwnedSlice(self.alloc);
+                    f.disabled_no_allowlist = false;
+                } else {
+                    var list: std.ArrayListUnmanaged([]const u8) = .empty;
+                    try list.append(self.alloc, try self.alloc.dupe(u8, user));
+                    self.config.connectors.fake = .{
+                        .allow_users = try list.toOwnedSlice(self.alloc),
+                        .disabled_no_allowlist = false,
+                    };
+                }
+                self.persistAllowUser(connector_name, user) catch {};
+            } else if (std.mem.eql(u8, connector_name, "slack")) {
                 if (self.config.connectors.slack) |*s| {
                     var list: std.ArrayListUnmanaged([]const u8) = .empty;
                     for (s.allow_users) |u| try list.append(self.alloc, u);
@@ -264,6 +397,7 @@ pub const Runtime = struct {
                     s.allow_users = try list.toOwnedSlice(self.alloc);
                     s.disabled_no_allowlist = false;
                 }
+                self.persistAllowUser(connector_name, user) catch {};
             } else if (std.mem.eql(u8, connector_name, "telegram")) {
                 if (self.config.connectors.telegram) |*t| {
                     if (std.fmt.parseInt(i64, user, 10)) |uid| {
@@ -274,6 +408,8 @@ pub const Runtime = struct {
                         t.disabled_no_allowlist = false;
                     } else |_| {}
                 }
+                self.persistAllowUser(connector_name, user) catch {};
+            } else if (std.mem.eql(u8, connector_name, "imsg")) {
                 if (self.config.connectors.imsg) |*i| {
                     var list: std.ArrayListUnmanaged([]const u8) = .empty;
                     for (i.allow_handles) |u| try list.append(self.alloc, u);
@@ -281,6 +417,7 @@ pub const Runtime = struct {
                     i.allow_handles = try list.toOwnedSlice(self.alloc);
                     i.disabled_no_allowlist = false;
                 }
+                self.persistAllowUser(connector_name, user) catch {};
             }
 
             return true;
@@ -290,7 +427,16 @@ pub const Runtime = struct {
     }
 
     pub fn isUserAuthorized(self: *Runtime, conv: ConversationKey, user: []const u8) bool {
-        if (std.mem.eql(u8, conv.connector, "slack")) {
+        if (std.mem.eql(u8, conv.connector, "fake")) {
+            if (self.config.connectors.fake) |f| {
+                if (f.disabled_no_allowlist and !self.hasActivePairingCode("fake")) return false;
+                if (f.allow_users.len == 0) return self.hasActivePairingCode("fake");
+                for (f.allow_users) |allowed| {
+                    if (std.mem.eql(u8, allowed, user)) return true;
+                }
+                return false;
+            }
+        } else if (std.mem.eql(u8, conv.connector, "slack")) {
             if (self.config.connectors.slack) |s| {
                 if (s.disabled_no_allowlist and !self.hasActivePairingCode("slack")) return false;
                 if (s.allow_users.len == 0) return self.hasActivePairingCode("slack");
@@ -321,7 +467,6 @@ pub const Runtime = struct {
         }
         return true;
     }
-
     fn allowlistPredicate(ctx: ?*const anyopaque, conv: ConversationKey, user: []const u8) bool {
         const self: *Runtime = @ptrCast(@alignCast(@constCast(ctx.?)));
         return self.isUserAuthorized(conv, user);
@@ -502,7 +647,6 @@ pub const Runtime = struct {
                         _ = conn.send(conn.ctx, self.alloc, msg.conv, "Pairing successful! You are now authorized.") catch {};
                         return;
                     }
-                    _ = conn.send(conn.ctx, self.alloc, msg.conv, "Unauthorized user. Run 'afx bridge pair' to authorize.") catch {};
                     return;
                 }
 
