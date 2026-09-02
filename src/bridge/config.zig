@@ -344,7 +344,7 @@ test "config: full config parsing" {
     const json_text =
         \\{
         \\  "bridge": {
-        \\    "workspace": "/Users/test/workspace",
+        \\    "workspace": "/tmp/afx-test-workspace",
         \\    "permission_mode": "auto",
         \\    "max_concurrent_sessions": 8,
         \\    "approval_timeout_s": 300,
@@ -376,7 +376,7 @@ test "config: full config parsing" {
     var cfg = try parse(alloc, parsed.value);
     defer cfg.deinit();
 
-    try std.testing.expectEqualStrings("/Users/test/workspace", cfg.workspace.?);
+    try std.testing.expectEqualStrings("/tmp/afx-test-workspace", cfg.workspace.?);
     try std.testing.expectEqual(PermissionMode.auto, cfg.permission_mode);
     try std.testing.expectEqual(@as(u32, 8), cfg.max_concurrent_sessions);
     try std.testing.expectEqual(@as(u32, 300), cfg.approval_timeout_s);
