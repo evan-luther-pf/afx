@@ -146,7 +146,6 @@ pub const Runtime = struct {
 
     running: std.atomic.Value(bool) = .init(false),
     worker_threads: []std.Thread = &.{},
-    connector_threads: []std.Thread = &.{},
     expiry_thread: ?std.Thread = null,
 
     start_time_s: i64 = 0,
@@ -502,10 +501,11 @@ pub const Runtime = struct {
         self.running.store(true, .seq_cst);
         self.start_time_s = @intCast(@divTrunc(io_mod.milliTimestamp(), 1000));
 
-        // 1. Spawn connector threads
-        self.connector_threads = try self.alloc.alloc(std.Thread, self.connectors.len);
-        for (self.connectors, 0..) |*conn, i| {
-            self.connector_threads[i] = try std.Thread.spawn(.{}, connectorThreadEntry, .{ self, conn });
+        // 1. Initialize connectors before reporting the runtime as started.
+        for (self.connectors) |*conn| {
+            conn.start(conn.ctx, &self.event_sink) catch |err| {
+                self.recordError(conn.name, @errorName(err));
+            };
         }
 
         // 2. Spawn worker threads
@@ -546,13 +546,6 @@ pub const Runtime = struct {
         self.alloc.free(self.worker_threads);
         self.worker_threads = &.{};
 
-        // Wait for connectors
-        for (self.connector_threads) |t| {
-            t.join();
-        }
-        self.alloc.free(self.connector_threads);
-        self.connector_threads = &.{};
-
         // Wait for expiry thread
         if (self.expiry_thread) |t| {
             t.join();
@@ -565,12 +558,6 @@ pub const Runtime = struct {
             if (std.mem.eql(u8, c.name, name)) return c;
         }
         return null;
-    }
-
-    fn connectorThreadEntry(self: *Runtime, conn: *Connector) void {
-        conn.start(conn.ctx, &self.event_sink) catch |err| {
-            self.recordError(conn.name, @errorName(err));
-        };
     }
 
     fn recordError(self: *Runtime, connector_name: []const u8, err_msg: []const u8) void {
