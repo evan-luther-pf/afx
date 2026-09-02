@@ -294,43 +294,15 @@ afx upgrade --channel dev
 Stable updates follow versioned GitHub releases. The optional development channel follows the moving `dev` prerelease.
 
 ## Documentation
-⚠ 2 unresolved conflicts detected
-- ours = HEAD
-- theirs = 3f52b90 (Add iMessage bridge connector and typedstream extractor)
-NOTICE: Inspect a block by reading `conflict://<N>` (add `/ours` / `/theirs` / `/base` to render a single side). Resolve with `write({ path: "conflict://<N>", content })`, or bulk-resolve every registered conflict with `write({ path: "conflict://*", content })`. Writes replace ONLY the marker block (markers + all sides) — never repeat the lines before/after it; they stay in place.
-`content` shorthand: a line that is exactly `@ours` / `@theirs` / `@base` / `@both` expands to that recorded section. `@both` is ours-then-theirs with no separator — only for additive conflicts where each side adds something different; NEVER for competing edits of the same lines (pick a side or write the combined text). Lines that are not a token pass through verbatim, so `"// keep both\n@ours\n@theirs"` literally writes the comment, then ours, then theirs.
-Per-id bulk: `write({ path: "conflict://*", content: "1: @ours\n2: @theirs\n…" })` resolves each listed id with that side in ONE call — the cheapest way through many pick-one conflicts; unlisted ids stay registered.
-Resolve each block faithfully: keep one side (`@ours`/`@theirs`), or combine them when both intents apply — never invent content beyond the recorded sides, and never stack both sides of competing edits. Resolve several conflicts in a single turn by issuing multiple `write` calls at once; ids stay valid as earlier blocks are resolved.
 
-──── #1  L237-248 ────
-<<< ours
-    "telegram": {
-      "token_env": "TELEGRAM_BOT_TOKEN",
-      "allow_users": [123456789],
-      "groups": "mention"
->>> theirs
-    "imsg": {
-      "allow_handles": ["+15551234567", "user@example.com"],
-      "poll_interval_ms": 2000,
-      "db_path": "~/Library/Messages/chat.db",
-      "group_prefix": "@afx"
+Read the [plain HTML documentation](https://evan-luther-pf.github.io/afx/) for setup, providers, permissions, sessions, tools, agents, updates, and project configuration.
 
-──── #2  L254-287 ────
-<<< ours
-#### Telegram connector
+Contributor and implementation details remain in [CONTRIBUTING.md](CONTRIBUTING.md).
 
-1. Create a bot using [@BotFather](https://t.me/botfather) on Telegram and copy the API token.
-2. Set the token environment variable named in `token_env` (e.g. `export TELEGRAM_BOT_TOKEN="123456:ABC-DEF..."`).
-3. Add authorized Telegram user IDs to `allow_users` (or run `afx bridge pair telegram` to authenticate via direct message pairing code).
-4. Group messages require `@<botusername>` mention or direct reply to the bot when `groups` is set to `"mention"`.
-… (1 more line)
->>> theirs
-### iMessage setup (macOS)
+## Lineage
 
-The iMessage bridge connects to local Messages via read-only SQLite polling of `chat.db` and AppleScript dispatch.
+afx takes interface inspiration from [Pi](https://github.com/badlogic/pi-mono) and [Oh My Pi](https://github.com/can1357/oh-my-pi). See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for included notices.
 
-#### Required permissions
+## License
 
-… (18 more lines)
-
-[Showing lines 1-300 of 313. Use :301 to continue]
+[Apache-2.0](LICENSE)

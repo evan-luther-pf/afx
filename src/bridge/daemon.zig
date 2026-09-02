@@ -683,6 +683,8 @@ pub fn handleBridgeCli(
                         );
                         try connector_list.append(alloc, telegram_conn.?.connector());
                     } else |_| {}
+                }
+            }
 
             if (only_connector == null or std.mem.eql(u8, only_connector.?, "imsg")) {
                 if (bridge_config.connectors.imsg) |imsg_cfg| {

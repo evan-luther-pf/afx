@@ -295,18 +295,586 @@ class PgsoCorpusTests(unittest.TestCase):
         (self.root / "tests" / "e2e" / test_file).write_text("test")
         payload = self.manifest()
         scenarios = payload["scenarios"]
-⚠ 1 unresolved conflict detected
-- ours = HEAD
-- theirs = 3f52b90 (Add iMessage bridge connector and typedstream extractor)
-NOTICE: Inspect a block by reading `conflict://<N>` (add `/ours` / `/theirs` / `/base` to render a single side). Resolve with `write({ path: "conflict://<N>", content })`, or bulk-resolve every registered conflict with `write({ path: "conflict://*", content })`. Writes replace ONLY the marker block (markers + all sides) — never repeat the lines before/after it; they stay in place.
-`content` shorthand: a line that is exactly `@ours` / `@theirs` / `@base` / `@both` expands to that recorded section. `@both` is ours-then-theirs with no separator — only for additive conflicts where each side adds something different; NEVER for competing edits of the same lines (pick a side or write the combined text). Lines that are not a token pass through verbatim, so `"// keep both\n@ours\n@theirs"` literally writes the comment, then ours, then theirs.
-Per-id bulk: `write({ path: "conflict://*", content: "1: @ours\n2: @theirs\n…" })` resolves each listed id with that side in ONE call — the cheapest way through many pick-one conflicts; unlisted ids stay registered.
-Resolve each block faithfully: keep one side (`@ours`/`@theirs`), or combine them when both intents apply — never invent content beyond the recorded sides, and never stack both sides of competing edits. Resolve several conflicts in a single turn by issuing multiple `write` calls at once; ids stay valid as earlier blocks are resolved.
+        assert isinstance(scenarios, list)
+        scenario = self.e2e_scenario(test_file)
+        scenario["profile_runs"] = 2
+        scenarios.append(scenario)
 
-──── #4  L75-79 ────
-<<< ours
-    "bridge-telegram.test.ts",
->>> theirs
-    "bridge-imsg.test.ts",
+        with self.assertRaisesRegex(PgsoError, "profile_runs"):
+            load_corpus(self.write_manifest(payload), repo_root=self.root)
 
-[Showing lines 1-300 of 884. Use :301 to continue]
+    def test_load_rejects_sound_and_nondeterministic_test_files(self) -> None:
+        for test_file in (
+            "notifications.test.ts",
+            "tui-agent.test.ts",
+            "tui-command-permissions.test.ts",
+            "web-search-live.test.ts",
+        ):
+            with self.subTest(test_file=test_file):
+                (self.root / "tests" / "e2e" / test_file).write_text("test")
+                payload = self.manifest()
+                scenarios = payload["scenarios"]
+                assert isinstance(scenarios, list)
+                scenarios.append(self.e2e_scenario(test_file))
+                with self.assertRaisesRegex(PgsoError, "forbidden corpus test"):
+                    load_corpus(self.write_manifest(payload), repo_root=self.root)
+
+    def test_load_requires_every_direct_command(self) -> None:
+        payload = self.manifest()
+        scenarios = payload["scenarios"]
+        assert isinstance(scenarios, list)
+        scenarios.pop()
+
+        with self.assertRaisesRegex(PgsoError, "missing required direct command"):
+            load_corpus(self.write_manifest(payload), repo_root=self.root)
+
+    def test_load_rejects_environment_keys_owned_by_the_runner(self) -> None:
+        for key in (
+            "HOME",
+            "LLVM_PROFILE_FILE",
+            "TMUX",
+            "TMUX_TMPDIR",
+            "AI_GATEWAY_API_KEY",
+            "FX_TRACE_LOG",
+            "FX_TRACE_SCOPES",
+        ):
+            with self.subTest(key=key):
+                payload = self.manifest()
+                scenarios = payload["scenarios"]
+                assert isinstance(scenarios, list)
+                scenarios[0]["env_set"] = {key: "unsafe"}
+                with self.assertRaisesRegex(PgsoError, "reserved environment key"):
+                    load_corpus(self.write_manifest(payload), repo_root=self.root)
+
+    def test_load_rejects_skipped_scenarios(self) -> None:
+        payload = self.manifest()
+        scenarios = payload["scenarios"]
+        assert isinstance(scenarios, list)
+        scenarios[0]["skip_reason"] = "not applicable"
+
+        with self.assertRaisesRegex(PgsoError, "cannot be skipped"):
+            load_corpus(self.write_manifest(payload), repo_root=self.root)
+
+    def test_production_manifest_classifies_every_e2e_file(self) -> None:
+        repo_root = pathlib.Path(__file__).resolve().parents[3]
+        corpus = load_corpus(
+            repo_root / "scripts" / "pgso" / "corpus.json",
+            repo_root=repo_root,
+        )
+
+        self.assertEqual(TRAINING_E2E_TESTS, corpus.training_test_files)
+        self.assertEqual(VERIFICATION_E2E_TESTS, corpus.verification_test_files)
+        self.assertEqual(
+            EXCLUDED_E2E_TESTS,
+            tuple(test_file for test_file, _ in corpus.intentional_exclusions),
+        )
+        self.assertEqual(36, len(corpus.scenarios))
+        self.assertEqual(57, len(corpus.candidate_scenarios))
+        self.assertEqual(
+            100,
+            next(
+                scenario.profile_runs
+                for scenario in corpus.scenarios
+                if scenario.name == "direct-sessions"
+            ),
+        )
+        self.assertEqual(
+            ("e2e-cli", "e2e-mcp-auth"),
+            tuple(
+                scenario.name
+                for scenario in corpus.scenarios
+                if scenario.allow_keychain
+            ),
+        )
+        self.assertEqual(
+            ("verify-oauth-keychain-migration",),
+            tuple(
+                scenario.name
+                for scenario in corpus.verification_scenarios
+                if scenario.allow_keychain
+            ),
+        )
+
+        discovered = tuple(
+            sorted(
+                path.name
+                for path in (repo_root / "tests" / "e2e").glob("*.test.ts")
+            )
+        )
+        self.assertEqual(
+            discovered,
+            tuple(sorted((*corpus.test_files, *EXCLUDED_E2E_TESTS))),
+        )
+
+    def test_behavior_corpus_adds_verification_only_scenarios(self) -> None:
+        training = self.make_scenario("training")
+        verification = self.make_scenario("verification")
+        corpus = Corpus(
+            repo_root=self.root,
+            manifest_path=self.manifest_path,
+            manifest_sha256="a" * 64,
+            scenarios=(training,),
+            verification_scenarios=(verification,),
+            intentional_exclusions=(
+                ("notifications.test.ts", "sound-related"),
+                ("tui-agent.test.ts", "requires a real model credential"),
+                ("tui-command-permissions.test.ts", "contains sound"),
+            ),
+        )
+        binary = self.root / "candidate-afx"
+        binary.write_bytes(b"candidate")
+        calls: list[str] = []
+
+        def command_runner(argv, **kwargs):
+            calls.append(argv[1])
+            return CommandResult(
+                argv=tuple(argv),
+                returncode=0,
+                stdout="ok\n",
+                stderr="",
+                elapsed_seconds=0.2,
+            )
+
+        result = run_behavior_corpus(
+            corpus,
+            binary,
+            self.root / "behavior-output",
+            command_runner=command_runner,
+        )
+
+        self.assertEqual(["training", "verification"], calls)
+        self.assertEqual(2, result.passed)
+
+    def test_training_corpus_omits_verification_only_scenarios(self) -> None:
+        training = self.make_scenario("training")
+        verification = self.make_scenario("verification")
+        corpus = Corpus(
+            repo_root=self.root,
+            manifest_path=self.manifest_path,
+            manifest_sha256="a" * 64,
+            scenarios=(training,),
+            verification_scenarios=(verification,),
+            intentional_exclusions=(
+                ("notifications.test.ts", "sound-related"),
+                ("tui-agent.test.ts", "requires a real model credential"),
+                ("tui-command-permissions.test.ts", "contains sound"),
+            ),
+        )
+
+        result, calls, _, _, _ = self.run_fixture(corpus)
+
+        self.assertEqual(1, result.passed)
+        self.assertEqual(["training"], [call["argv"][1] for call in calls])
+
+    def make_scenario(
+        self,
+        name: str,
+        *,
+        requires_tmux: bool = False,
+    ) -> Scenario:
+        return Scenario(
+            name=name,
+            argv=("{binary}", name),
+            cwd=".",
+            env_set=(("FX_SOUND", "0"),),
+            env_unset=("PGSO_UNSET_ME",),
+            timeout_seconds=5,
+            requires_tmux=requires_tmux,
+            allow_keychain=False,
+            test_file=None,
+        )
+
+    def make_corpus(self, *scenarios: Scenario) -> Corpus:
+        return Corpus(
+            repo_root=self.root,
+            manifest_path=self.manifest_path,
+            manifest_sha256="a" * 64,
+            scenarios=tuple(scenarios),
+            intentional_exclusions=(
+                ("notifications.test.ts", "sound-related"),
+                ("tui-agent.test.ts", "requires a real model credential"),
+                ("tui-command-permissions.test.ts", "contains sound"),
+            ),
+        )
+
+    def run_fixture(
+        self,
+        corpus: Corpus,
+        *,
+        fail_scenario: str | None = None,
+        omit_profile_for: str | None = None,
+    ):
+        output = self.root / "output"
+        profile_dir = output / "profiles" / "raw"
+        profile_dir.mkdir(parents=True, exist_ok=True)
+        merged_profile = output / "profiles" / "merged.profdata"
+        binary = self.root / "instrumented-afx"
+        binary.write_bytes(b"instrumented")
+        calls: list[dict[str, object]] = []
+        merges: list[tuple[str, ...]] = []
+
+        def command_runner(argv, **kwargs):
+            environment = kwargs["env"]
+            scenario_name = argv[1]
+            calls.append(
+                {
+                    "argv": tuple(argv),
+                    "env": dict(environment),
+                    "cwd": kwargs["cwd"],
+                }
+            )
+            if scenario_name == fail_scenario:
+                raise PgsoError(f"failed scenario: {scenario_name}")
+            if scenario_name != omit_profile_for:
+                pattern = environment["LLVM_PROFILE_FILE"]
+                raw = pathlib.Path(
+                    pattern.replace("%m", "module")
+                    .replace("%p", str(len(calls)))
+                    .replace("%c", "")
+                )
+                raw.write_bytes(scenario_name.encode())
+            return CommandResult(
+                argv=tuple(argv),
+                returncode=0,
+                stdout="ok\n",
+                stderr="",
+                elapsed_seconds=0.25,
+            )
+
+        def profile_merger(toolchain, raw_profiles, merged, log_path):
+            merges.append(tuple(path.name for path in raw_profiles))
+            merged.write_bytes(b"merged")
+            for raw in raw_profiles:
+                raw.unlink()
+            return len(raw_profiles)
+
+        result = run_corpus(
+            corpus,
+            binary,
+            profile_dir,
+            merged_profile,
+            toolchain=object(),
+            command_runner=command_runner,
+            profile_merger=profile_merger,
+        )
+        return result, calls, merges, binary, merged_profile
+
+    def test_run_uses_a_hermetic_environment_and_owns_per_scenario_profiles(self) -> None:
+        corpus = self.make_corpus(
+            self.make_scenario("first"),
+            self.make_scenario("second"),
+        )
+        with mock.patch.dict(
+            os.environ,
+            {
+                "PGSO_INHERITED": "yes",
+                "PGSO_UNSET_ME": "remove",
+                "TMUX": "/tmp/user-tmux,1,0",
+                "TMUX_PANE": "%1",
+                "FX_TRACE_LOG": "/tmp/user-afx-trace.log",
+                "FX_TRACE_SCOPES": "user-scope",
+            },
+            clear=False,
+        ):
+            result, calls, merges, binary, merged = self.run_fixture(corpus)
+
+        self.assertEqual(2, result.passed)
+        self.assertEqual(0, result.skipped)
+        self.assertEqual(0, result.failed)
+        self.assertEqual(2, result.merged_raw_profiles)
+        self.assertFalse((self.root / "zig-out" / "bin" / "afx").exists())
+        self.assertTrue(merged.is_file())
+        self.assertEqual(2, len(calls))
+        self.assertNotIn("PGSO_INHERITED", calls[0]["env"])
+        self.assertNotIn("PGSO_UNSET_ME", calls[0]["env"])
+        self.assertNotIn("TMUX", calls[0]["env"])
+        self.assertNotIn("TMUX_PANE", calls[0]["env"])
+        self.assertNotIn("FX_TRACE_LOG", calls[0]["env"])
+        self.assertNotIn("FX_TRACE_SCOPES", calls[0]["env"])
+        self.assertEqual("1", calls[0]["env"]["FX_E2E_DISABLE_DOTENV"])
+        self.assertEqual(os.environ["PATH"], calls[0]["env"]["PATH"])
+        self.assertEqual(
+            str(self.root / "output" / "profiles" / "home" / "first"),
+            calls[0]["env"]["HOME"],
+        )
+        self.assertEqual(
+            "set-option -g history-limit 100000\n",
+            (
+                self.root
+                / "output"
+                / "profiles"
+                / "home"
+                / "first"
+                / ".tmux.conf"
+            ).read_text(),
+        )
+        patterns = [call["env"]["LLVM_PROFILE_FILE"] for call in calls]
+        self.assertNotEqual(patterns[0], patterns[1])
+        self.assertTrue(all("%m-%p-%c.profraw" in pattern for pattern in patterns))
+        self.assertEqual(("first-module-1-.profraw",), merges[0])
+        self.assertEqual(("second-module-2-.profraw",), merges[1])
+
+    def test_training_profile_runs_repeat_one_direct_scenario(self) -> None:
+        payload = self.manifest()
+        scenarios = payload["scenarios"]
+        assert isinstance(scenarios, list)
+        scenarios[-1]["profile_runs"] = 3
+        loaded = load_corpus(self.write_manifest(payload), repo_root=self.root)
+        corpus = self.make_corpus(loaded.scenarios[-1])
+
+        result, calls, merges, _, _ = self.run_fixture(corpus)
+
+        self.assertEqual(1, result.passed)
+        self.assertEqual(0.75, result.results[0].elapsed_seconds)
+        self.assertEqual(3, result.merged_raw_profiles)
+        self.assertEqual(3, len(calls))
+        self.assertEqual(
+            (
+                "direct-sessions-module-1-.profraw",
+                "direct-sessions-module-2-.profraw",
+                "direct-sessions-module-3-.profraw",
+            ),
+            merges[0],
+        )
+
+    def test_behavior_corpus_ignores_training_profile_runs(self) -> None:
+        payload = self.manifest()
+        scenarios = payload["scenarios"]
+        assert isinstance(scenarios, list)
+        scenarios[-1]["profile_runs"] = 3
+        loaded = load_corpus(self.write_manifest(payload), repo_root=self.root)
+        corpus = self.make_corpus(loaded.scenarios[-1])
+        binary = self.root / "candidate-afx"
+        binary.write_bytes(b"candidate")
+        calls: list[tuple[str, ...]] = []
+
+        def command_runner(argv, **kwargs):
+            calls.append(tuple(argv))
+            return CommandResult(
+                argv=tuple(argv),
+                returncode=0,
+                stdout="ok\n",
+                stderr="",
+                elapsed_seconds=0.2,
+            )
+
+        result = run_behavior_corpus(
+            corpus,
+            binary,
+            self.root / "behavior-output",
+            command_runner=command_runner,
+        )
+
+        self.assertEqual(1, result.passed)
+        self.assertEqual(1, len(calls))
+
+    def test_run_cleans_the_isolated_tmux_server(self) -> None:
+        marker = self.root / "tmux-cleaned"
+        fake_bin = self.root / "fake-bin"
+        fake_bin.mkdir()
+        tmux = fake_bin / "tmux"
+        tmux.write_text(
+            "#!/bin/sh\nprintf '%s' \"$TMUX_TMPDIR\" > \"$PGSO_TMUX_MARKER\"\n"
+        )
+        tmux.chmod(0o755)
+        scenario = dataclasses_replace_env(
+            self.make_scenario("tui", requires_tmux=True),
+            ("PGSO_TMUX_MARKER", str(marker)),
+        )
+        corpus = self.make_corpus(scenario)
+
+        with mock.patch.dict(
+            os.environ,
+            {"PATH": f"{fake_bin}{os.pathsep}{os.environ.get('PATH', '')}"},
+            clear=False,
+        ):
+            self.run_fixture(corpus)
+
+        tmux_tmp = pathlib.Path(marker.read_text())
+        self.assertEqual(pathlib.Path("/tmp"), tmux_tmp.parent)
+        self.assertTrue(tmux_tmp.name.startswith("fxp-tmux-"))
+        self.assertLess(len(f"{tmux_tmp}/tmux-501/default".encode()), 104)
+        self.assertFalse(tmux_tmp.exists())
+
+    def test_keychain_access_is_scoped_to_the_declared_scenario_home(self) -> None:
+        host_home = self.root / "host-home"
+        host_keychains = host_home / "Library" / "Keychains"
+        host_keychains.mkdir(parents=True)
+        scenario = dataclasses_replace_allow_keychain(
+            self.make_scenario("keychain")
+        )
+
+        with mock.patch.object(pathlib.Path, "home", return_value=host_home):
+            self.run_fixture(self.make_corpus(scenario))
+
+        link = (
+            self.root
+            / "output"
+            / "profiles"
+            / "home"
+            / "keychain"
+            / "Library"
+            / "Keychains"
+        )
+        self.assertTrue(link.is_symlink())
+        self.assertEqual(host_keychains.resolve(), link.resolve())
+
+    def test_run_stops_and_records_a_failed_scenario(self) -> None:
+        corpus = self.make_corpus(
+            self.make_scenario("first"),
+            self.make_scenario("broken"),
+            self.make_scenario("never-runs"),
+        )
+
+        with self.assertRaises(CorpusRunError) as raised:
+            self.run_fixture(corpus, fail_scenario="broken")
+
+        self.assertEqual(1, raised.exception.result.passed)
+        self.assertEqual(1, raised.exception.result.failed)
+        self.assertEqual(2, len(raised.exception.result.results))
+
+    def test_run_stops_when_a_successful_scenario_writes_no_profile(self) -> None:
+        corpus = self.make_corpus(self.make_scenario("missing-profile"))
+
+        with self.assertRaisesRegex(CorpusRunError, "produced no raw profile"):
+            self.run_fixture(corpus, omit_profile_for="missing-profile")
+
+    def test_behavior_corpus_restores_the_previous_canonical_binary(self) -> None:
+        corpus = self.make_corpus(self.make_scenario("first"))
+        canonical = self.root / "zig-out" / "bin" / "afx"
+        canonical.parent.mkdir(parents=True)
+        canonical.write_bytes(b"stale")
+        stale_inode = canonical.stat().st_ino
+        binary = self.root / "candidate-afx"
+        binary.write_bytes(b"candidate")
+
+        def command_runner(argv, **kwargs):
+            return CommandResult(
+                argv=tuple(argv),
+                returncode=0,
+                stdout="ok\n",
+                stderr="",
+                elapsed_seconds=0.2,
+            )
+
+        run_behavior_corpus(
+            corpus,
+            binary,
+            self.root / "behavior-output",
+            command_runner=command_runner,
+        )
+
+        self.assertEqual(b"stale", canonical.read_bytes())
+        self.assertEqual(stale_inode, canonical.stat().st_ino)
+
+    def test_interruption_cleans_tmux_and_restores_the_canonical_binary(self) -> None:
+        corpus = self.make_corpus(self.make_scenario("first", requires_tmux=True))
+        canonical = self.root / "zig-out" / "bin" / "afx"
+        canonical.parent.mkdir(parents=True)
+        canonical.write_bytes(b"original")
+        binary = self.root / "candidate-afx"
+        binary.write_bytes(b"candidate")
+
+        def interrupted_runner(*_args, **_kwargs):
+            raise KeyboardInterrupt()
+
+        with (
+            mock.patch("scripts.pgso.corpus._cleanup_tmux") as cleanup,
+            self.assertRaises(KeyboardInterrupt),
+        ):
+            run_behavior_corpus(
+                corpus,
+                binary,
+                self.root / "behavior-output",
+                command_runner=interrupted_runner,
+            )
+
+        cleanup.assert_called_once()
+        self.assertEqual(b"original", canonical.read_bytes())
+
+    def test_behavior_corpus_runs_the_exact_binary_without_profile_output(self) -> None:
+        corpus = self.make_corpus(
+            self.make_scenario("first"),
+            self.make_scenario("second"),
+        )
+        binary = self.root / "candidate-afx"
+        binary.write_bytes(b"candidate")
+        calls: list[tuple[tuple[str, ...], dict[str, str]]] = []
+
+        def command_runner(argv, **kwargs):
+            calls.append((tuple(argv), dict(kwargs["env"])))
+            return CommandResult(
+                argv=tuple(argv),
+                returncode=0,
+                stdout="ok\n",
+                stderr="",
+                elapsed_seconds=0.2,
+            )
+
+        result = run_behavior_corpus(
+            corpus,
+            binary,
+            self.root / "behavior-output",
+            command_runner=command_runner,
+        )
+
+        canonical = self.root / "zig-out" / "bin" / "afx"
+        self.assertEqual(2, result.passed)
+        self.assertEqual(0, result.failed)
+        self.assertEqual(0, result.merged_raw_profiles)
+        self.assertTrue(all(call[0][0] == str(canonical) for call in calls))
+        self.assertTrue(all("LLVM_PROFILE_FILE" not in call[1] for call in calls))
+        self.assertTrue(all("FX_TRACE_SCOPES" not in call[1] for call in calls))
+        self.assertEqual(
+            {
+                str(
+                    self.root
+                    / "behavior-output"
+                    / "traces"
+                    / "first.log"
+                ),
+                str(
+                    self.root
+                    / "behavior-output"
+                    / "traces"
+                    / "second.log"
+                ),
+            },
+            {call[1]["FX_TRACE_LOG"] for call in calls},
+        )
+        self.assertTrue(
+            all(
+                call[1]["HOME"]
+                == str(self.root / "behavior-output" / "home" / call[0][1])
+                for call in calls
+            )
+        )
+        self.assertEqual(
+            "set-option -g history-limit 100000\n",
+            (
+                self.root
+                / "behavior-output"
+                / "home"
+                / "first"
+                / ".tmux.conf"
+            ).read_text(),
+        )
+
+
+def dataclasses_replace_env(
+    scenario: Scenario,
+    item: tuple[str, str],
+) -> Scenario:
+    import dataclasses
+
+    return dataclasses.replace(scenario, env_set=(*scenario.env_set, item))
+
+
+def dataclasses_replace_allow_keychain(scenario: Scenario) -> Scenario:
+    import dataclasses
+
+    return dataclasses.replace(scenario, allow_keychain=True)
+
+
+if __name__ == "__main__":
+    unittest.main()
