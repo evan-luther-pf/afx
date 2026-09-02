@@ -126,6 +126,8 @@
     {"name": "verify-tui-slash-menu", "argv": ["bun", "test", "--max-concurrency", "1", "./tui-slash-menu.test.ts"], "test_file": "tui-slash-menu.test.ts"},
     {"name": "verify-web-fetch-permission-progress", "argv": ["bun", "test", "--max-concurrency", "1", "./web-fetch-permission-progress.test.ts"], "test_file": "web-fetch-permission-progress.test.ts", "requires_tmux": false},
     {"name": "verify-web-search-permission-progress", "argv": ["bun", "test", "--max-concurrency", "1", "./web-search-permission-progress.test.ts"], "test_file": "web-search-permission-progress.test.ts", "requires_tmux": false},
-    {"name": "verify-yolo-permission-mode", "argv": ["bun", "test", "--max-concurrency", "1", "./yolo-permission-mode.test.ts"], "test_file": "yolo-permission-mode.test.ts"}
+    {"name": "verify-yolo-permission-mode", "argv": ["bun", "test", "--max-concurrency", "1", "./yolo-permission-mode.test.ts"], "test_file": "yolo-permission-mode.test.ts"},
+    {"name": "verify-bridge", "argv": ["bun", "test", "--max-concurrency", "1", "./bridge.test.ts"], "test_file": "bridge.test.ts", "requires_tmux": false},
+    {"name": "verify-bridge-slack", "argv": ["bun", "test", "--max-concurrency", "1", "./bridge-slack.test.ts"], "test_file": "bridge-slack.test.ts", "requires_tmux": false}
   ]
 }

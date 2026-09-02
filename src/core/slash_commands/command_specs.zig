@@ -30,6 +30,7 @@ pub const TopLevelKind = enum {
     upgrade,
     replay,
     workspace,
+    bridge,
 };
 
 pub const SlashKind = enum {
@@ -222,6 +223,20 @@ pub const SlashSpec = struct {
             .export_session,
             => false,
             else => true,
+        };
+    }
+
+    pub fn bridgeAvailable(self: SlashSpec) bool {
+        return switch (self.kind) {
+            .new_session,
+            .resume_session,
+            .status,
+            .model,
+            .permissions,
+            .usage,
+            .help,
+            => true,
+            else => false,
         };
     }
 

@@ -3045,3 +3045,158 @@ test "usage text and JSON render the same optional and ordered facts" {
         parsed.value.object.get("models").?.array.items[0].object.get("model").?.string,
     );
 }
+
+pub const ConnectorStatus = struct {
+    name: []const u8,
+    state: []const u8,
+    last_error: ?[]const u8 = null,
+};
+
+pub const BridgeStatusSnapshot = struct {
+    running: bool,
+    pid: ?i32 = null,
+    uptime_s: ?u64 = null,
+    connectors: []const ConnectorStatus = &.{},
+    conversation_count: u32 = 0,
+    active_turns: u32 = 0,
+    max_concurrent_sessions: u32 = 4,
+    workspace: []const u8 = "",
+
+    pub fn render(self: BridgeStatusSnapshot, alloc: Allocator, format: OutputFormat) ![]u8 {
+        return switch (format) {
+            .text => self.renderText(alloc),
+            .json => self.renderJson(alloc),
+        };
+    }
+
+    pub fn renderText(self: BridgeStatusSnapshot, alloc: Allocator) ![]u8 {
+        var out: std.Io.Writer.Allocating = .init(alloc);
+        defer out.deinit();
+
+        if (self.running) {
+            try out.writer.writeAll("Bridge Daemon: running");
+            if (self.pid) |p| {
+                try out.writer.print(" (pid {d}", .{p});
+                if (self.uptime_s) |u| {
+                    try out.writer.print(", uptime {d}s", .{u});
+                }
+                try out.writer.writeAll(")");
+            }
+            try out.writer.writeByte('\n');
+        } else {
+            try out.writer.writeAll("Bridge Daemon: stopped\n");
+        }
+
+        if (self.workspace.len > 0) {
+            try out.writer.print("Workspace: {s}\n", .{self.workspace});
+        }
+
+        try out.writer.print("Active sessions: {d} / {d}", .{ self.conversation_count, self.max_concurrent_sessions });
+        if (self.active_turns > 0) {
+            try out.writer.print(" ({d} turn in progress)\n", .{self.active_turns});
+        } else {
+            try out.writer.writeAll(" (idle)\n");
+        }
+
+        if (self.connectors.len > 0) {
+            try out.writer.writeAll("\nConnectors:\n");
+            for (self.connectors) |c| {
+                try out.writer.print("  {s}: {s}", .{ c.name, c.state });
+                if (c.last_error) |err| {
+                    try out.writer.print(" (error: {s})", .{err});
+                }
+                try out.writer.writeByte('\n');
+            }
+        }
+
+        return try out.toOwnedSlice();
+    }
+
+    pub fn renderJson(self: BridgeStatusSnapshot, alloc: Allocator) ![]u8 {
+        var out: std.Io.Writer.Allocating = .init(alloc);
+        defer out.deinit();
+
+        try out.writer.writeAll("{\"running\":");
+        try std.json.Stringify.value(self.running, .{}, &out.writer);
+
+        try out.writer.writeAll(",\"pid\":");
+        if (self.pid) |p| {
+            try std.json.Stringify.value(p, .{}, &out.writer);
+        } else {
+            try out.writer.writeAll("null");
+        }
+
+        try out.writer.writeAll(",\"uptime_s\":");
+        if (self.uptime_s) |u| {
+            try std.json.Stringify.value(u, .{}, &out.writer);
+        } else {
+            try out.writer.writeAll("null");
+        }
+
+        try out.writer.writeAll(",\"workspace\":");
+        try std.json.Stringify.value(self.workspace, .{}, &out.writer);
+
+        try out.writer.writeAll(",\"conversation_count\":");
+        try std.json.Stringify.value(self.conversation_count, .{}, &out.writer);
+
+        try out.writer.writeAll(",\"active_turns\":");
+        try std.json.Stringify.value(self.active_turns, .{}, &out.writer);
+
+        try out.writer.writeAll(",\"max_concurrent_sessions\":");
+        try std.json.Stringify.value(self.max_concurrent_sessions, .{}, &out.writer);
+
+        try out.writer.writeAll(",\"connectors\":[");
+        for (self.connectors, 0..) |c, i| {
+            if (i > 0) try out.writer.writeByte(',');
+            try out.writer.writeAll("{\"name\":");
+            try std.json.Stringify.value(c.name, .{}, &out.writer);
+            try out.writer.writeAll(",\"state\":");
+            try std.json.Stringify.value(c.state, .{}, &out.writer);
+            try out.writer.writeAll(",\"last_error\":");
+            if (c.last_error) |err| {
+                try std.json.Stringify.value(err, .{}, &out.writer);
+            } else {
+                try out.writer.writeAll("null");
+            }
+            try out.writer.writeByte('}');
+        }
+        try out.writer.writeAll("]}");
+
+        return try out.toOwnedSlice();
+    }
+};
+
+test "bridge status snapshot text and JSON render from one struct" {
+    const alloc = std.testing.allocator;
+    const connectors = [_]ConnectorStatus{
+        .{ .name = "fake", .state = "running" },
+        .{ .name = "slack", .state = "error", .last_error = "auth failure" },
+    };
+    const snapshot = BridgeStatusSnapshot{
+        .running = true,
+        .pid = 4321,
+        .uptime_s = 120,
+        .connectors = &connectors,
+        .conversation_count = 3,
+        .active_turns = 1,
+        .max_concurrent_sessions = 4,
+        .workspace = "/tmp/repo",
+    };
+
+    const text = try snapshot.render(alloc, .text);
+    defer alloc.free(text);
+    try std.testing.expect(std.mem.find(u8, text, "Bridge Daemon: running (pid 4321, uptime 120s)") != null);
+    try std.testing.expect(std.mem.find(u8, text, "Workspace: /tmp/repo") != null);
+    try std.testing.expect(std.mem.find(u8, text, "fake: running") != null);
+    try std.testing.expect(std.mem.find(u8, text, "slack: error (error: auth failure)") != null);
+
+    const json = try snapshot.render(alloc, .json);
+    defer alloc.free(json);
+    var parsed = try std.json.parseFromSlice(std.json.Value, alloc, json, .{});
+    defer parsed.deinit();
+
+    try std.testing.expect(parsed.value.object.get("running").?.bool);
+    try std.testing.expectEqual(@as(i64, 4321), parsed.value.object.get("pid").?.integer);
+    try std.testing.expectEqualStrings("/tmp/repo", parsed.value.object.get("workspace").?.string);
+    try std.testing.expectEqual(@as(usize, 2), parsed.value.object.get("connectors").?.array.items.len);
+}
