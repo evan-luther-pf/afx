@@ -3565,9 +3565,9 @@ fn needsFullEntryConfig(args: []const [:0]const u8) bool {
     return std.mem.eql(u8, command, "ask") or
         std.mem.eql(u8, command, "acp") or
         std.mem.eql(u8, command, "pr") or
-        std.mem.eql(u8, command, "issue");
+        std.mem.eql(u8, command, "issue") or
+        std.mem.eql(u8, command, "bridge");
 }
-
 fn needsEarlyThreadedIo(args: []const [:0]const u8) bool {
     if (needsFullEntryConfig(args)) return true;
     const command = cli_surface.commandAfterGlobalLaunchArgs(args) orelse return false;
@@ -4414,4 +4414,10 @@ test {
     _ = @import("bridge/config.zig");
     _ = @import("bridge/approvals.zig");
     _ = @import("bridge/connectors/fake.zig");
+    _ = @import("bridge/connectors/slack_api.zig");
+    _ = @import("bridge/connectors/slack.zig");
+    _ = @import("bridge/router.zig");
+    _ = @import("bridge/commands.zig");
+    _ = @import("bridge/runtime.zig");
+    _ = @import("bridge/daemon.zig");
 }

@@ -1,7 +1,7 @@
 const std = @import("std");
+const io_mod = @import("../core/shared/io.zig");
 const connector_mod = @import("connector.zig");
 const ConversationKey = connector_mod.ConversationKey;
-
 pub const Entry = struct {
     session_id: []const u8,
     workspace_root: []const u8,
@@ -26,12 +26,12 @@ const StoredCursor = struct {
 
 fn readFileBytes(alloc: std.mem.Allocator, file: *std.Io.File, max_bytes: usize) ![]u8 {
     var read_buf: [8192]u8 = undefined;
-    var r = file.reader(std.testing.io, &read_buf);
+    var r = file.reader(io_mod.getIo(), &read_buf);
     return r.interface.allocRemaining(alloc, std.Io.Limit.limited(max_bytes));
 }
 
 fn nanoTimestamp() i128 {
-    const ts = std.Io.Timestamp.now(std.testing.io, .real);
+    const ts = std.Io.Timestamp.now(io_mod.getIo(), .real);
     return @intCast(ts.nanoseconds);
 }
 
@@ -53,11 +53,11 @@ pub const Store = struct {
         };
         errdefer store.deinit();
 
-        var file = std.Io.Dir.cwd().openFile(std.testing.io, path, .{}) catch |err| switch (err) {
+        var file = std.Io.Dir.cwd().openFile(io_mod.getIo(), path, .{}) catch |err| switch (err) {
             error.FileNotFound => return store,
             else => return err,
         };
-        defer file.close(std.testing.io);
+        defer file.close(io_mod.getIo());
 
         const content = readFileBytes(alloc, &file, 10 * 1024 * 1024) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
@@ -328,24 +328,23 @@ pub const Store = struct {
 
         const tmp_path = try std.fmt.allocPrint(self.alloc, "{s}.tmp.{d}", .{ self.path, nanoTimestamp() });
         defer self.alloc.free(tmp_path);
-
-        var file = try std.Io.Dir.cwd().createFile(std.testing.io, tmp_path, .{
+        var file = try std.Io.Dir.cwd().createFile(io_mod.getIo(), tmp_path, .{
             .truncate = true,
         });
         var write_ok = false;
         defer {
-            file.close(std.testing.io);
+            file.close(io_mod.getIo());
             if (!write_ok) {
-                std.Io.Dir.cwd().deleteFile(std.testing.io, tmp_path) catch {};
+                std.Io.Dir.cwd().deleteFile(io_mod.getIo(), tmp_path) catch {};
             }
         }
 
-        try file.writeStreamingAll(std.testing.io, payload);
-        try std.Io.Dir.cwd().setFilePermissions(std.testing.io, tmp_path, std.Io.File.Permissions.fromMode(0o600), .{});
+        try file.writeStreamingAll(io_mod.getIo(), payload);
+        try std.Io.Dir.cwd().setFilePermissions(io_mod.getIo(), tmp_path, std.Io.File.Permissions.fromMode(0o600), .{});
         write_ok = true;
 
         var cwd = std.Io.Dir.cwd();
-        try cwd.rename(tmp_path, cwd, self.path, std.testing.io);
+        try cwd.rename(tmp_path, cwd, self.path, io_mod.getIo());
     }
 };
 

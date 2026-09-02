@@ -80,6 +80,7 @@ pub const Command = union(enum) {
     upgrade: []const [:0]const u8,
     replay: []const [:0]const u8,
     workspace: []const [:0]const u8,
+    bridge: []const [:0]const u8,
     unknown: []const u8,
 };
 
@@ -428,6 +429,9 @@ pub fn parse(command_catalog: CommandCatalog, args: []const [:0]const u8) Comman
     if (std.mem.startsWith(u8, command, resume_id_alias_prefix)) {
         return .{ .resume_session = .{ .args = args, .top_level_alias = true } };
     }
+    if (std.mem.eql(u8, command, "bridge")) {
+        return .{ .bridge = args[1..] };
+    }
     const kind = command_specs.topLevelKindFromToken(command_catalog, command) orelse
         return .{ .unknown = command };
     return switch (kind) {
@@ -460,6 +464,7 @@ pub fn parse(command_catalog: CommandCatalog, args: []const [:0]const u8) Comman
         .upgrade => .{ .upgrade = args[1..] },
         .replay => .{ .replay = args[1..] },
         .workspace => .{ .workspace = args[1..] },
+        .bridge => .{ .bridge = args[1..] },
     };
 }
 
@@ -1748,6 +1753,29 @@ fn runNonInteractiveWithDeps(
         .replay => |rest| {
             const exit_code = try cli_replay.run(alloc, rest);
             return if (exit_code == 0) .handled_success else .handled_failure;
+        },
+        .bridge => |rest| {
+            const daemon = @import("../../bridge/daemon.zig");
+            const bridge_deps = struct {
+                run_deps: RunDeps,
+                pub fn writeStdout(self: @This(), text: []const u8) !void {
+                    try self.run_deps.write_stdout(self.run_deps.stdout_ctx, text);
+                }
+                pub fn writeStderr(self: @This(), text: []const u8) !void {
+                    try self.run_deps.write_stderr(self.run_deps.stderr_ctx, text);
+                }
+            }{ .run_deps = deps };
+            const result = daemon.handleBridgeCli(alloc, rest, cfg, bridge_deps) catch |err| {
+                try writeStderr(deps, "afx bridge error: ");
+                try writeStderr(deps, @errorName(err));
+                try writeStderr(deps, "\n");
+                return .handled_failure;
+            };
+            return switch (result) {
+                .handled_success => .handled_success,
+                .handled_failure => .handled_failure,
+                .handled_exit => |code| .{ .handled_exit = code },
+            };
         },
         .unknown => |command| {
             try writeStderr(deps, product.name ++ ": unknown subcommand: ");

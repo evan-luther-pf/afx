@@ -797,7 +797,7 @@ pub const Host = struct {
         } else if (std.mem.eql(u8, option_name, "fast")) {
             active.fast_mode = std.mem.eql(u8, option_value, "true");
         } else if (std.mem.eql(u8, option_name, "thought_budget")) {
-            active.effort = std.meta.stringToEnum(shared_types.ReasoningEffort, option_value) orelse .auto;
+            active.effort = shared_types.ReasoningEffort.parse(option_value) orelse .auto;
         }
     }
 
@@ -1031,7 +1031,7 @@ pub fn applySessionMode(
     active: *HostedSession,
     mode_id: []const u8,
 ) void {
-    const spec = registry.spec(mode_id) orelse return;
+    const spec = registry.lookup(mode_id) orelse return;
     active.mode = spec.id;
     active.permission_mode = spec.permission_mode;
     if (active.plan_return_mode) |return_mode| {

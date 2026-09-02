@@ -189,6 +189,54 @@ afx starts in `auto` mode. Routine development work can proceed, while unresolve
 
 Project settings live in `.afx.json`. Private settings, credentials, skills, agents, and saved sessions live under `~/.afx/`.
 
+
+## Chat bridge
+
+afx includes a headless chat bridge daemon that connects chat platforms (Slack, Telegram, iMessage) to local AFX sessions.
+
+### Commands
+
+```sh
+afx bridge start                        # start in foreground
+afx bridge start --daemon               # start daemon in background
+afx bridge start --connector fake       # start with deterministic fake connector
+afx bridge stop                         # stop running bridge daemon
+afx bridge status                       # check daemon status
+afx bridge status --json                # structured status output
+afx bridge pair <connector>             # generate pairing code for authorization
+```
+
+### In-chat slash commands
+
+When chatting with the bridge bot, standard control commands are supported:
+
+- `/new` — start a fresh session
+- `/resume <id>` — resume a saved session by id
+- `/status` — display current model, mode, and session info
+- `/model <id> [effort]` — change model and reasoning effort
+- `/permissions <ask|auto>` — set permission mode
+- `/cancel` — cancel the currently running turn
+- `/usage` — show token usage
+- `/help` — list available commands
+
+### Configuration
+
+Bridge settings live in `~/.afx/bridge.json` (mode 0600):
+
+```json
+{
+  "workspace": "/path/to/project",
+  "permission_mode": "ask",
+  "max_concurrent_sessions": 4,
+  "connectors": {
+    "slack": {
+      "app_token_env": "SLACK_APP_TOKEN",
+      "bot_token_env": "SLACK_BOT_TOKEN",
+      "allow_users": ["U12345678"]
+    }
+  }
+}
+```
 ## Updates
 
 afx checks [GitHub Releases](https://github.com/evan-luther-pf/afx/releases) for new versions. When an update is ready, press `Ctrl+G` to reload into it.
