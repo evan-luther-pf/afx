@@ -439,6 +439,7 @@ fn loadStartupStateFromOwnedWorkspace(
     state.images_enabled = settings.images orelse true;
     state.effort = settings.effort orelse .auto;
     state.first_call_tool_choice = settings.first_call_tool_choice orelse .auto;
+    state.statusline_context = settings.statusline_context orelse false;
     state.statusline_session = settings.statusline_session orelse false;
     state.statusline_workspace = settings.statusline_workspace orelse false;
     state.statusline_cost = settings.statusline_cost orelse false;

@@ -3812,6 +3812,7 @@ pub fn settingsCatalogSnapshot(app: anytype) settings_catalog.Snapshot {
         }
     }
     if (comptime @hasField(App, "statusline_context")) snapshot.statusline_context = app.statusline_context;
+    if (comptime @hasField(App, "statusline_session")) snapshot.statusline_session = app.statusline_session;
     if (comptime @hasField(App, "workspace_identity")) snapshot.statusline_workspace = app.workspace_identity.enabled;
     if (comptime @hasField(App, "statusline_cost")) snapshot.statusline_cost = app.statusline_cost;
     if (comptime @hasField(App, "statusline_git")) snapshot.statusline_git = app.statusline_git;

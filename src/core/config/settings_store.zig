@@ -1042,6 +1042,7 @@ fn applyUserPatchToRoot(
 
     if (patch.prompt_history_enabled) |enabled| {
         var prompt_history = if (root.object.getPtr("prompt_history")) |value| blk: {
+            if (value.* != .object) return error.InvalidSettingsFormat;
             break :blk value;
         } else blk: {
             try root.object.put(arena, "prompt_history", .{ .object = .empty });
