@@ -101,26 +101,16 @@ pub fn hexToBytesAlloc(alloc: Allocator, hex_str: []const u8) ![]u8 {
     return out;
 }
 
-/// Executes a read-only sqlite query via `/usr/bin/sqlite3 -json -readonly`.
+/// Executes a read-only sqlite query via the `sqlite3` available on PATH.
 pub fn runSqliteQuery(alloc: Allocator, io: std.Io, db_path: []const u8, query: []const u8) ![]u8 {
     const argv = &[_][]const u8{
-        "/usr/bin/sqlite3",
+        "sqlite3",
         "-json",
         "-readonly",
         db_path,
         query,
     };
-    const run_res = std.process.run(alloc, io, .{ .argv = argv }) catch blk: {
-        // Fallback to sqlite3 on PATH if /usr/bin/sqlite3 is not available
-        const fallback_argv = &[_][]const u8{
-            "sqlite3",
-            "-json",
-            "-readonly",
-            db_path,
-            query,
-        };
-        break :blk try std.process.run(alloc, io, .{ .argv = fallback_argv });
-    };
+    const run_res = try std.process.run(alloc, io, .{ .argv = argv });
     defer alloc.free(run_res.stderr);
     if (run_res.term != .exited or run_res.term.exited != 0) {
         alloc.free(run_res.stdout);
