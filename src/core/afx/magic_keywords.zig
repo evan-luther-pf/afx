@@ -365,3 +365,100 @@ test "make a plan prefix requests plan mode without substring false positives" {
     try std.testing.expect(!requestsPlan("do not make a plan"));
     try std.testing.expect(!requestsPlan("make a planner"));
 }
+
+test "magic keyword matching rules and boundaries" {
+    // Exact lowercase only
+    try std.testing.expect(!containsUltrathink("ULTRATHINK"));
+    try std.testing.expect(!containsUltrathink("UltraThink"));
+    try std.testing.expect(!containsOrchestrate("ORCHESTRATE"));
+    try std.testing.expect(!containsOrchestrate("Orchestrate"));
+
+    // Sentence punctuation & quotes allowed
+    try std.testing.expect(containsUltrathink("ultrathink,"));
+    try std.testing.expect(containsUltrathink("ultrathink;"));
+    try std.testing.expect(containsUltrathink("ultrathink:"));
+    try std.testing.expect(containsUltrathink("ultrathink?"));
+    try std.testing.expect(containsUltrathink("ultrathink!"));
+    try std.testing.expect(containsUltrathink("'ultrathink'"));
+    try std.testing.expect(containsUltrathink("\"ultrathink\""));
+    try std.testing.expect(containsUltrathink("(ultrathink)"));
+    try std.testing.expect(containsOrchestrate("orchestrate,"));
+    try std.testing.expect(containsOrchestrate("orchestrate;"));
+    try std.testing.expect(containsOrchestrate("orchestrate:"));
+    try std.testing.expect(containsOrchestrate("orchestrate?"));
+    try std.testing.expect(containsOrchestrate("orchestrate!"));
+    try std.testing.expect(containsOrchestrate("'orchestrate'"));
+    try std.testing.expect(containsOrchestrate("\"orchestrate\""));
+    try std.testing.expect(containsOrchestrate("(orchestrate)"));
+
+    // Adjacency rejection: letters, digits, underscore, slash, backslash, hyphen, dot
+    try std.testing.expect(!containsUltrathink("ultrathinked"));
+    try std.testing.expect(!containsUltrathink("preultrathink"));
+    try std.testing.expect(!containsUltrathink("ultrathink1"));
+    try std.testing.expect(!containsUltrathink("1ultrathink"));
+    try std.testing.expect(!containsUltrathink("_ultrathink"));
+    try std.testing.expect(!containsUltrathink("ultrathink_"));
+    try std.testing.expect(!containsUltrathink("foo/ultrathink"));
+    try std.testing.expect(!containsUltrathink("ultrathink/bar"));
+    try std.testing.expect(!containsUltrathink("foo\\ultrathink"));
+    try std.testing.expect(!containsUltrathink("ultrathink\\bar"));
+    try std.testing.expect(!containsUltrathink("ultrathink-fast"));
+    try std.testing.expect(!containsUltrathink("pre-ultrathink"));
+    try std.testing.expect(!containsUltrathink("ultrathink.ts"));
+    try std.testing.expect(!containsUltrathink("foo.ultrathink"));
+
+    try std.testing.expect(!containsOrchestrate("orchestrated"));
+    try std.testing.expect(!containsOrchestrate("preorchestrate"));
+    try std.testing.expect(!containsOrchestrate("orchestrate2"));
+    try std.testing.expect(!containsOrchestrate("2orchestrate"));
+    try std.testing.expect(!containsOrchestrate("_orchestrate"));
+    try std.testing.expect(!containsOrchestrate("orchestrate_"));
+    try std.testing.expect(!containsOrchestrate("foo/orchestrate"));
+    try std.testing.expect(!containsOrchestrate("orchestrate/bar"));
+    try std.testing.expect(!containsOrchestrate("foo\\orchestrate"));
+    try std.testing.expect(!containsOrchestrate("orchestrate\\bar"));
+    try std.testing.expect(!containsOrchestrate("orchestrate-plan"));
+    try std.testing.expect(!containsOrchestrate("pre-orchestrate"));
+    try std.testing.expect(!containsOrchestrate("orchestrate.ts"));
+    try std.testing.expect(!containsOrchestrate("foo.orchestrate"));
+}
+
+test "code spans and fenced code blocks are ignored" {
+    try std.testing.expect(!containsUltrathink("run `ultrathink` in terminal"));
+    try std.testing.expect(!containsOrchestrate("run `orchestrate` in terminal"));
+    try std.testing.expect(!containsUltrathink("run ``ultrathink`` in terminal"));
+    try std.testing.expect(!containsOrchestrate("run ``orchestrate`` in terminal"));
+
+    const fenced_code =
+        \\Here is code:
+        \\```typescript
+        \\const x = "ultrathink";
+        \\const y = "orchestrate";
+        \\```
+        \\done.
+    ;
+    try std.testing.expect(!containsUltrathink(fenced_code));
+    try std.testing.expect(!containsOrchestrate(fenced_code));
+
+    const tilde_fenced =
+        \\~~~bash
+        \\echo ultrathink orchestrate
+        \\~~~
+    ;
+    try std.testing.expect(!containsUltrathink(tilde_fenced));
+    try std.testing.expect(!containsOrchestrate(tilde_fenced));
+}
+
+test "turn guidance deduplication and combinations" {
+    // Single keyword repeated injects once
+    try std.testing.expectEqualStrings(ultrathink_guidance, turnGuidance(true, false));
+    try std.testing.expectEqualStrings(orchestrate_guidance, turnGuidance(false, true));
+
+    // Both keywords inject combined guidance with each notice once
+    const combined = turnGuidance(true, true);
+    try std.testing.expect(std.mem.find(u8, combined, ultrathink_guidance) != null);
+    try std.testing.expect(std.mem.find(u8, combined, orchestrate_guidance) != null);
+
+    // No keywords returns empty string
+    try std.testing.expectEqualStrings("", turnGuidance(false, false));
+}

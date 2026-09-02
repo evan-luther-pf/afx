@@ -3806,6 +3806,9 @@ pub fn settingsCatalogSnapshot(app: anytype) settings_catalog.Snapshot {
             if (comptime @hasField(@TypeOf(app.shell), "fullscreen_display")) {
                 snapshot.fullscreen_display = app.shell.fullscreen_display;
             }
+            if (comptime @hasField(@TypeOf(app.shell), "images_enabled")) {
+                snapshot.images = app.shell.images_enabled;
+            }
         }
     }
     if (comptime @hasField(App, "statusline_context")) snapshot.statusline_context = app.statusline_context;
@@ -3920,6 +3923,23 @@ pub fn applySettingsCatalogChange(app: anytype, change: settings_catalog.Change)
                 app,
                 "tool display",
                 .{ .visual_tool_blocks = visual },
+                runtime_changed,
+            );
+        },
+        .images => {
+            const enabled = parseOnOff(change.value) orelse return error.InvalidSettingsCatalogValue;
+            const runtime_changed = if (comptime @hasField(@TypeOf(app.shell), "images_enabled"))
+                app.shell.images_enabled != enabled
+            else
+                false;
+            if (runtime_changed) {
+                app.shell.images_enabled = enabled;
+                app.shell.markTranscriptContentDirty();
+            }
+            try persistUserPreferences(
+                app,
+                "images",
+                .{ .images = enabled },
                 runtime_changed,
             );
         },

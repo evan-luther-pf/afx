@@ -125,6 +125,7 @@ const State = enum {
     csi,
     osc,
     dcs,
+    apc,
 };
 
 const SavedCursor = struct {
@@ -275,6 +276,7 @@ pub const Grid = struct {
     osc_buffer: std.ArrayList(u8) = .empty,
     dcs_saw_esc: bool = false,
     dcs_buffer: std.ArrayList(u8) = .empty,
+    apc_saw_esc: bool = false,
     utf8_buffer: [4]u8 = [_]u8{0} ** 4,
     utf8_len: u8 = 0,
     utf8_expected: u8 = 0,
@@ -680,11 +682,24 @@ pub const Grid = struct {
                     }
                     i += 1;
                 },
+                .apc => {
+                    if (b == 0x07) {
+                        self.apc_saw_esc = false;
+                        self.state = .normal;
+                    } else if (b == 0x1b) {
+                        self.apc_saw_esc = true;
+                    } else if (self.apc_saw_esc and b == '\\') {
+                        self.apc_saw_esc = false;
+                        self.state = .normal;
+                    } else {
+                        self.apc_saw_esc = false;
+                    }
+                    i += 1;
+                },
             }
         }
         return i;
     }
-
     fn dispatchEscape(self: *Grid, byte: u8) !void {
         switch (byte) {
             '[' => {
@@ -700,6 +715,10 @@ pub const Grid = struct {
                 self.dcs_saw_esc = false;
                 self.dcs_buffer.clearRetainingCapacity();
                 self.state = .dcs;
+            },
+            '_', '^' => {
+                self.apc_saw_esc = false;
+                self.state = .apc;
             },
             '7' => {
                 self.saveCursor();
@@ -824,8 +843,8 @@ pub const Grid = struct {
         self.osc_buffer.clearRetainingCapacity();
         self.dcs_saw_esc = false;
         self.dcs_buffer.clearRetainingCapacity();
+        self.apc_saw_esc = false;
     }
-
     fn dispatchOscAndFinish(self: *Grid) !void {
         defer self.cancelControlSequence();
         try self.dispatchOsc();
@@ -4573,4 +4592,23 @@ test "full snapshot painter owns the viewport without AFX chrome" {
     try testing.expect(std.mem.find(u8, output.written(), "\x1b[?1004h") != null);
     try testing.expect(std.mem.find(u8, output.written(), "Subagent") == null);
     try testing.expect(std.mem.find(u8, output.written(), "Ctrl-") == null);
+}
+
+test "grid consumes Kitty APC and OSC 1337 escape sequences without corrupting cells" {
+    const alloc = testing.allocator;
+    var grid = try Grid.init(alloc, 20, 2);
+    defer grid.deinit();
+
+    try grid.feed("text\x1b_Ga=T,f=100;PAYLOAD\x1b\\after\x1b]1337;File=inline=1:B64\x07done");
+
+    var line1: std.ArrayList(u8) = .empty;
+    defer line1.deinit(alloc);
+    var col: u16 = 1;
+    while (col <= grid.cols) : (col += 1) {
+        const cell = grid.cellAt(1, col).?;
+        if (cell.codepoint != 0 and cell.codepoint != ' ') {
+            try line1.append(alloc, @intCast(cell.codepoint));
+        }
+    }
+    try testing.expectEqualStrings("textafterdone", line1.items);
 }

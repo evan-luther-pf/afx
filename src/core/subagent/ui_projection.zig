@@ -9,6 +9,7 @@ const domain = @import("domain.zig");
 const execution = @import("execution.zig");
 const manager_mod = @import("manager.zig");
 const resume_admission = @import("resume_admission.zig");
+const model_capabilities = @import("../config/model_capabilities.zig");
 const tool_result = @import("tool_result.zig");
 const activity_runtime = @import("../output/activity_runtime.zig");
 const io_mod = @import("../shared/io.zig");
@@ -18,7 +19,7 @@ const session_child_store = @import("../session/session_child_store.zig");
 const session_codec = @import("../session/session_codec.zig");
 const types = @import("../shared/types.zig");
 const session_store = @import("../session/session_store.zig");
-
+const session_usage = @import("../session/session_usage.zig");
 const Allocator = std.mem.Allocator;
 
 pub const consumer_id = "subagent-manager-ui";
@@ -87,6 +88,18 @@ pub const PendingApproval = struct {
     }
 };
 
+pub const UsageMetrics = struct {
+    input_tokens: ?u64 = null,
+    output_tokens: ?u64 = null,
+    total_cost: ?f64 = null,
+    request_count: ?u64 = null,
+    turn_count: ?u64 = null,
+    tool_call_count: ?u64 = null,
+    context_window: ?u32 = null,
+    context_fill_percent: ?f64 = null,
+    last_activity_ms: ?i64 = null,
+};
+
 pub const Node = struct {
     child_id: []u8,
     parent_id: []u8,
@@ -106,7 +119,7 @@ pub const Node = struct {
     failure_reason: ?[]u8 = null,
     activity: []Activity,
     approvals: []Approval,
-
+    usage: UsageMetrics = .{},
     pub fn deinit(self: *Node, alloc: Allocator) void {
         alloc.free(self.child_id);
         alloc.free(self.parent_id);
@@ -1319,10 +1332,111 @@ fn projectNode(alloc: Allocator, source: Source, tree_node: manager_mod.TreeNode
         node.degraded = mapLoadError(err);
         return node;
     };
-    if (maybe_ledger == null) return node;
-    var ledger = maybe_ledger.?;
-    defer ledger.deinit(alloc);
-    try projectLedger(alloc, &node, ledger, source.root_id);
+    var ledger_holder = maybe_ledger;
+    defer if (ledger_holder) |*ledger| ledger.deinit(alloc);
+    if (ledger_holder) |ledger| {
+        try projectLedger(alloc, &node, ledger, source.root_id);
+    }
+
+    var metrics = UsageMetrics{};
+    var latest_activity_ms: ?i64 = if (tree_node.created_at_ms > 0) tree_node.created_at_ms else null;
+    if (record.updated_at_ms > 0) {
+        latest_activity_ms = if (latest_activity_ms) |cur| @max(cur, record.updated_at_ms) else record.updated_at_ms;
+    }
+    for (record.events) |ev| {
+        if (ev.timestamp_ms > 0) {
+            latest_activity_ms = if (latest_activity_ms) |cur| @max(cur, ev.timestamp_ms) else ev.timestamp_ms;
+        }
+    }
+    if (ledger_holder) |led| {
+        for (led.deliveries) |del| {
+            if (del.timestamp_ms > 0) {
+                latest_activity_ms = if (latest_activity_ms) |cur| @max(cur, del.timestamp_ms) else del.timestamp_ms;
+            }
+        }
+        for (led.approvals) |appr| {
+            if (appr.created_at_ms > 0) {
+                latest_activity_ms = if (latest_activity_ms) |cur| @max(cur, appr.created_at_ms) else appr.created_at_ms;
+            }
+            if (appr.resolved_at_ms) |resolved| {
+                if (resolved > 0) {
+                    latest_activity_ms = if (latest_activity_ms) |cur| @max(cur, resolved) else resolved;
+                }
+            }
+        }
+    }
+
+    var tool_call_counter: usize = 0;
+
+    if (source.sessions.loadReadOnly(alloc, tree_node.child_id)) |session_state| {
+        var state = session_state;
+        defer state.deinit(alloc);
+
+        if (state.updated_at_ms > 0) {
+            latest_activity_ms = if (latest_activity_ms) |cur| @max(cur, state.updated_at_ms) else state.updated_at_ms;
+        }
+
+        metrics.turn_count = state.history.len;
+        for (state.history) |turn| {
+            switch (turn) {
+                .assistant => |a| {
+                    for (a.execution.tool_steps) |step| {
+                        tool_call_counter += step.tool_calls.len;
+                    }
+                },
+                .background_command => |b| {
+                    for (b.execution.tool_steps) |step| {
+                        tool_call_counter += step.tool_calls.len;
+                    }
+                },
+                .interrupted => |i| {
+                    for (i.execution.tool_steps) |step| {
+                        tool_call_counter += step.tool_calls.len;
+                    }
+                    if (i.tool_call != null) tool_call_counter += 1;
+                    tool_call_counter += i.completed_tool_names.len;
+                },
+                .compacted_summary => {},
+            }
+        }
+        metrics.tool_call_count = tool_call_counter;
+
+        if (state.usage) |usage_snap| {
+            metrics.input_tokens = usage_snap.input_tokens;
+            metrics.output_tokens = usage_snap.output_tokens;
+            metrics.total_cost = usage_snap.total_cost;
+            metrics.request_count = usage_snap.request_count orelse state.history.len;
+        } else if (state.total_input_tokens > 0 or state.total_output_tokens > 0) {
+            metrics.input_tokens = state.total_input_tokens;
+            metrics.output_tokens = state.total_output_tokens;
+            metrics.request_count = state.history.len;
+        }
+
+        const effective_model: ?[]const u8 = if (record.configuration.model) |m| m else if (state.preferences.model.len > 0) state.preferences.model else null;
+        if (effective_model) |model_name| {
+            if (model_capabilities.contextWindowSize(model_name)) |win| {
+                metrics.context_window = win;
+                if (metrics.input_tokens) |inp| {
+                    if (win > 0) {
+                        metrics.context_fill_percent = (@as(f64, @floatFromInt(inp)) / @as(f64, @floatFromInt(win))) * 100.0;
+                    }
+                }
+            }
+        }
+    } else |_| {
+        if (node.activity.len > 0) {
+            metrics.tool_call_count = node.activity.len;
+        }
+        if (record.configuration.model) |model_name| {
+            if (model_capabilities.contextWindowSize(model_name)) |win| {
+                metrics.context_window = win;
+            }
+        }
+    }
+
+    metrics.last_activity_ms = latest_activity_ms;
+    node.usage = metrics;
+
     return node;
 }
 
@@ -2725,4 +2839,128 @@ test "child chat loads bounded authoritative pages and reports stale cursors" {
     defer refreshed.deinit(alloc);
     try std.testing.expect(refreshed == .chat);
     try std.testing.expectEqual(child_history_page_limit, refreshed.chat.page.?.history.turns.len);
+}
+test "node projection loads usage metrics from child session state" {
+    const alloc = std.testing.allocator;
+    const root_id = "root-usage";
+    const child_id = "child-usage";
+    var env = try ProjectionTestEnvironment.init(alloc);
+    defer env.deinit(alloc);
+    try env.createSession(alloc, root_id);
+
+    var child_state = try projectionTestState(alloc, child_id, env.workspace);
+    defer child_state.deinit(alloc);
+
+    alloc.free(child_state.preferences.model);
+    child_state.preferences.model = try alloc.dupe(u8, "anthropic/claude-opus-4.6");
+
+    // Create history turns with tool calls
+    var turns = try alloc.alloc(session.HistoryTurn, 3);
+    for (0..3) |i| {
+        var prompt_buf: [32]u8 = undefined;
+        const p = try std.fmt.bufPrint(&prompt_buf, "prompt {d}", .{i});
+        turns[i] = try session.makeAssistantTurn(alloc, p, "answer");
+        var calls = try alloc.alloc(types.ToolCall, 2);
+        calls[0] = .{
+            .id = try alloc.dupe(u8, "call-1"),
+            .name = try alloc.dupe(u8, "read_file"),
+            .arguments_json = try alloc.dupe(u8, "{}"),
+        };
+        calls[1] = .{
+            .id = try alloc.dupe(u8, "call-2"),
+            .name = try alloc.dupe(u8, "write_file"),
+            .arguments_json = try alloc.dupe(u8, "{}"),
+        };
+        var steps = try alloc.alloc(types.ToolExecutionStep, 1);
+        steps[0] = .{ .tool_calls = calls };
+        turns[i].assistant.execution.tool_steps = steps;
+    }
+    child_state.history = turns;
+    child_state.updated_at_ms = 5000;
+
+    var models = try alloc.alloc(session_usage.ModelAggregate, 1);
+    models[0] = .{
+        .model = try alloc.dupe(u8, "anthropic/claude-opus-4.6"),
+        .first_sequence = 1,
+        .total_cost = 0.075,
+        .input_tokens = 20000,
+        .output_tokens = 4000,
+        .cache_read_tokens = 1000,
+        .cache_write_tokens = 500,
+        .request_count = 3,
+    };
+
+    const usage_snap = session_usage.Snapshot{
+        .billing = .complete,
+        .api_duration_complete = true,
+        .wall_duration_complete = true,
+        .code_complete = true,
+        .next_sequence = 4,
+        .settled_through_sequence = 3,
+        .api_duration_ms = 1500,
+        .wall_duration_ms = 2000,
+        .total_cost = 0.075,
+        .input_tokens = 20000,
+        .output_tokens = 4000,
+        .cache_read_tokens = 1000,
+        .cache_write_tokens = 500,
+        .request_count = 3,
+        .billable_web_search_calls = 0,
+        .lines_added = 0,
+        .lines_removed = 0,
+        .models = models,
+        .pending = try alloc.alloc(session_usage.PendingGeneration, 0),
+    };
+    child_state.usage = usage_snap;
+
+    var child_loaded = try env.store.startWritableSession(alloc, child_state);
+    _ = try child_loaded.commitStateReplacement(
+        alloc,
+        child_loaded.state,
+        .recovery,
+        .retry_expected_tail,
+        .{},
+    );
+    child_loaded.deinit(alloc);
+
+    var manager = manager_mod.Manager{ .sessions = &env.store };
+    var create = try domain.validateCommand(alloc, .{ .create = .{
+        .name = "usage child",
+        .mode = .persistent,
+    } });
+    defer create.deinit(alloc);
+    var created = try manager.execute(alloc, create, .{
+        .actor_id = root_id,
+        .operation_id = "create-usage-child",
+        .created_child_id = child_id,
+        .timestamp_ms = 1,
+    });
+    defer created.deinit(alloc);
+
+    const source = Source{
+        .root_id = root_id,
+        .manager = &manager,
+        .sessions = &env.store,
+    };
+
+    var loaded = try load(alloc, source);
+    defer loaded.deinit(alloc);
+    try std.testing.expect(loaded == .snapshot);
+    const snap = loaded.snapshot;
+    try std.testing.expectEqual(@as(usize, 1), snap.nodes.len);
+
+    const metrics = snap.nodes[0].usage;
+    try std.testing.expectEqual(@as(?u64, 20000), metrics.input_tokens);
+    try std.testing.expectEqual(@as(?u64, 4000), metrics.output_tokens);
+    if (metrics.total_cost) |cost| {
+        try std.testing.expectApproxEqAbs(@as(f64, 0.075), cost, 0.0001);
+    } else return error.TestExpectedNotNull;
+    try std.testing.expectEqual(@as(?u64, 3), metrics.request_count);
+    try std.testing.expectEqual(@as(?u64, 3), metrics.turn_count);
+    try std.testing.expectEqual(@as(?u64, 6), metrics.tool_call_count);
+    try std.testing.expectEqual(@as(?u32, 1_000_000), metrics.context_window);
+    if (metrics.context_fill_percent) |pct| {
+        try std.testing.expectApproxEqAbs(@as(f64, 2.0), pct, 0.0001);
+    } else return error.TestExpectedNotNull;
+    try std.testing.expectEqual(@as(?i64, 5000), metrics.last_activity_ms);
 }

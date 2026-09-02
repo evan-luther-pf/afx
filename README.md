@@ -102,6 +102,10 @@ Common reads remain compact. Commands, edits, searches, tasks, and debugger work
 
 afx keeps ordinary work in terminal scrollback. Full-screen views are reserved for interactions that genuinely need them, such as permission review, menus, and agent management.
 
+## Inline images
+
+In terminals that support graphics (iTerm2, WezTerm, Ghostty, and kitty), image attachments render inline while their row is on screen; scrollback keeps the textual `[Image #N]` badge. Inside tmux or unsupported terminals, badges are always used. Toggle with the `Images` setting in `/settings`. The full-transcript review screen uses badges.
+
 ## Custom themes
 
 afx auto-detects dark and light terminal backgrounds and supports user-defined color themes. Themes live at `~/.afx/themes/<name>.json`:
@@ -135,9 +139,16 @@ Run `/dump` to copy the full model-facing context (system prompt, model configur
 - `Ctrl+O`: Open the full transcript review screen. Switch between Review and Full detail with `←`/`→`, scroll with `PgUp`/`PgDn` or mouse wheel, search with `/` (`n`/`N` jump to next/previous match), and press `Esc` to close search or exit.
 - `Ctrl+R`: Interactive prompt history search in the composer. Filter past entries incrementally, navigate matches with `Up`/`Down` or `Ctrl+R`, press `Enter` to recall into the composer without submitting, or press `Esc` to restore the draft.
 - `Alt+E`: Open the current composer draft in `$VISUAL` or `$EDITOR`. On editor exit, replaces the draft with the edited contents.
-- `Ctrl+X`: Open the subagent manager to view, pause, or resume parallel background agents.
+- `Ctrl+X`: Open the subagent manager to view, monitor, pause, or resume parallel background agents.
 - `Ctrl+G`: Reload into a downloaded update when ready.
 
+## Subagent manager
+
+Press `Ctrl+X` to open the subagent manager and inspect live and archived parallel agents.
+
+- **Roster overview**: Roster rows display live status alongside compact resource metrics (cumulative token count, estimated USD spend, and elapsed time since last activity). On narrow terminal widths, trailing metrics truncate gracefully without line wrapping. Missing metrics render with em-dash (`—`) placeholders.
+- **Aggregate header**: The header aggregates cumulative token usage and estimated spend across all active child agents.
+- **Detailed metrics**: Inspecting an individual child reveals its full resource block, including cumulative input and output tokens, estimated cost in USD, total request and turn counts, tool-call count, model context-window fill percentage, and last activity timestamp.
 Run `/hotkeys` to see every active shortcut and its binding status. Customize keybindings in `~/.afx/keybindings.json`:
 
 ```json
@@ -149,6 +160,28 @@ Run `/hotkeys` to see every active shortcut and its binding status. Customize ke
 ```
 
 Assigning an empty array `[]` disables a shortcut.
+
+## Magic keywords
+
+afx supports magic keywords in prompt text. Including a keyword injects a hidden, per-turn instruction into the model request while preserving the raw keyword text in the visible user message and session history. Magic keywords are always enabled in v1 without a separate settings toggle, and recognized keywords render highlighted in bold accent color in the composer.
+
+### Supported keywords
+
+- `ultrathink`: Injects a hidden turn instruction directing the model to reason carefully step-by-step through constraints, failure modes, and verification before acting.
+- `orchestrate`: Injects a hidden turn instruction directing the model to map the full task scope, decompose independent work into parallel subagents via `task`, and verify each phase before advancing.
+
+### Matching rules
+
+- Exact lowercase spelling only (`ultrathink`, `orchestrate`). Uppercase or title-case variations are ignored.
+- Must appear as a standalone word. Sentence punctuation and quotes adjacent to the word (such as commas, quotes, exclamation marks, or parentheses) are allowed.
+- Adjacency to letters, digits, underscores, slashes, backslashes, hyphens, or dots does not match (for example, `orchestrated`, `orchestrate.ts`, `foo/ultrathink`, and `ultrathink-mode` are not treated as keywords).
+- Occurrences inside backtick code spans (`` `ultrathink` ``) and fenced code blocks are ignored.
+- Multiple distinct keywords in the same prompt inject their respective notices once. Repeated occurrences of the same keyword inject the notice once.
+
+### Examples
+
+- `ultrathink before refactoring the auth session tokens`: highlights `ultrathink` and injects careful step-by-step reasoning guidance for the turn.
+- `orchestrate the full migration across core packages`: highlights `orchestrate` and injects parallel decomposition guidance for the turn.
 
 ## Permissions
 

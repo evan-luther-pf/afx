@@ -4183,7 +4183,19 @@ fn paintRoot(
 
     if (row.* + 2 < child_limit) try writeLine(alloc, writer, cols, row, child_limit, "");
     const agent_count = countNodes(snapshot.nodes, false);
-    try writeSectionHeading(alloc, writer, cols, row, child_limit, "Agents", agent_count);
+    var live_tokens: ?u64 = null;
+    var live_cost: ?f64 = null;
+    for (snapshot.nodes) |node| {
+        if (node.state == .archived) continue;
+        if (node.usage.input_tokens != null or node.usage.output_tokens != null) {
+            const node_tokens = (node.usage.input_tokens orelse 0) + (node.usage.output_tokens orelse 0);
+            live_tokens = (live_tokens orelse 0) + node_tokens;
+        }
+        if (node.usage.total_cost) |cost| {
+            live_cost = (live_cost orelse 0.0) + cost;
+        }
+    }
+    try writeSectionHeading(alloc, writer, cols, row, child_limit, "Agents", agent_count, live_tokens, live_cost);
     if (pendingApprovalOwner(runtime, main_approval)) |owner| {
         try writeApprovalOwnerLine(
             alloc,
@@ -4250,6 +4262,8 @@ fn paintRoot(
             limit,
             "Background processes",
             visible_terminal_count,
+            null,
+            null,
         );
     }
     if (runtime.terminal_snapshot) |terminal_snapshot| {
@@ -4271,6 +4285,65 @@ fn paintRoot(
     }
 }
 
+pub fn formatCompactTokens(buf: []u8, tokens: ?u64) []const u8 {
+    const val = tokens orelse return "—";
+    if (val >= 1_000_000) {
+        return std.fmt.bufPrint(buf, "{d:.1}M tok", .{@as(f64, @floatFromInt(val)) / 1_000_000.0}) catch "—";
+    }
+    if (val >= 1_000) {
+        return std.fmt.bufPrint(buf, "{d:.1}k tok", .{@as(f64, @floatFromInt(val)) / 1_000.0}) catch "—";
+    }
+    return std.fmt.bufPrint(buf, "{d} tok", .{val}) catch "—";
+}
+
+pub fn formatCost(buf: []u8, cost: ?f64) []const u8 {
+    const val = cost orelse return "—";
+    if (val < 0.01 and val > 0.00001) {
+        return std.fmt.bufPrint(buf, "${d:.4}", .{val}) catch "—";
+    }
+    return std.fmt.bufPrint(buf, "${d:.2}", .{val}) catch "—";
+}
+
+pub fn formatAge(buf: []u8, now_ms: i64, timestamp_ms: ?i64) []const u8 {
+    const ts = timestamp_ms orelse return "—";
+    if (ts <= 0) return "—";
+    const elapsed_ms = if (now_ms > ts) @as(u64, @intCast(now_ms - ts)) else 0;
+    const total_seconds = elapsed_ms / 1000;
+    if (total_seconds < 60) {
+        return std.fmt.bufPrint(buf, "{d}s ago", .{total_seconds}) catch "—";
+    }
+    if (total_seconds < 3600) {
+        return std.fmt.bufPrint(buf, "{d}m ago", .{total_seconds / 60}) catch "—";
+    }
+    if (total_seconds < 86400) {
+        return std.fmt.bufPrint(buf, "{d}h ago", .{total_seconds / 3600}) catch "—";
+    }
+    return std.fmt.bufPrint(buf, "{d}d ago", .{total_seconds / 86400}) catch "—";
+}
+
+pub fn formatTokensDetail(buf: []u8, in_tok: ?u64, out_tok: ?u64) []const u8 {
+    if (in_tok == null and out_tok == null) return "—";
+    var in_buf: [32]u8 = undefined;
+    var out_buf: [32]u8 = undefined;
+    const in_str = if (in_tok) |v| std.fmt.bufPrint(&in_buf, "{d}", .{v}) catch "—" else "—";
+    const out_str = if (out_tok) |v| std.fmt.bufPrint(&out_buf, "{d}", .{v}) catch "—" else "—";
+    if (in_tok != null and out_tok != null) {
+        const total = in_tok.? + out_tok.?;
+        return std.fmt.bufPrint(buf, "{s} in · {s} out ({d} total)", .{ in_str, out_str, total }) catch "—";
+    }
+    return std.fmt.bufPrint(buf, "{s} in · {s} out", .{ in_str, out_str }) catch "—";
+}
+
+pub fn formatContextFillDetail(buf: []u8, fill: ?f64, window: ?u32) []const u8 {
+    if (window) |win| {
+        if (fill) |pct| {
+            return std.fmt.bufPrint(buf, "{d:.1}% ({d} token window)", .{ pct, win }) catch "—";
+        }
+        return std.fmt.bufPrint(buf, "— ({d} token window)", .{win}) catch "—";
+    }
+    return "—";
+}
+
 fn writeSectionHeading(
     alloc: Allocator,
     writer: *std.Io.Writer,
@@ -4279,15 +4352,25 @@ fn writeSectionHeading(
     limit: usize,
     label: []const u8,
     count: usize,
+    tokens: ?u64,
+    cost: ?f64,
 ) !void {
     var line: std.Io.Writer.Allocating = .init(alloc);
     defer line.deinit();
     try line.writer.writeAll(ui_render.bold_style);
     try line.writer.print("{s} {d}", .{ label, count });
     try line.writer.writeAll(ui_render.reset_style);
+    if (count > 0 and (tokens != null or cost != null)) {
+        try line.writer.writeAll(ui_render.dim_style);
+        var tok_buf: [32]u8 = undefined;
+        var cost_buf: [32]u8 = undefined;
+        const tok_str = formatCompactTokens(&tok_buf, tokens);
+        const cost_str = formatCost(&cost_buf, cost);
+        try line.writer.print(" · {s} · {s}", .{ tok_str, cost_str });
+        try line.writer.writeAll(ui_render.reset_style);
+    }
     try writeLine(alloc, writer, cols, row, limit, line.written());
 }
-
 fn writeDimLine(
     alloc: Allocator,
     writer: *std.Io.Writer,
@@ -4465,28 +4548,46 @@ fn composeNodeRow(
 ) !void {
     var safe_name = try text_utils.encodeTerminalSafe(alloc, node.name, 256);
     defer safe_name.deinit(alloc);
-    var metadata: std.Io.Writer.Allocating = .init(alloc);
-    defer metadata.deinit();
-    var has_metadata = false;
+
+    var alert_segments: std.ArrayList([]const u8) = .empty;
+    defer alert_segments.deinit(alloc);
+    var alert_bufs: [4][48]u8 = undefined;
+
     if (node.unread_count > 0) {
-        try metadata.writer.print("unread {d}{s}", .{ node.unread_count, if (node.unread_truncated) "+" else "" });
-        has_metadata = true;
+        const s = std.fmt.bufPrint(&alert_bufs[0], "unread {d}{s}", .{ node.unread_count, if (node.unread_truncated) "+" else "" }) catch "";
+        if (s.len > 0) try alert_segments.append(alloc, s);
     }
     if (node.stale) {
-        if (has_metadata) try metadata.writer.writeAll(" · ");
-        try metadata.writer.writeAll("history gap");
-        has_metadata = true;
+        try alert_segments.append(alloc, "history gap");
     }
     if (node.approvals.len > 0) {
-        if (has_metadata) try metadata.writer.writeAll(" · ");
-        try metadata.writer.print("approval {d}", .{node.approvals.len});
-        has_metadata = true;
+        const s = std.fmt.bufPrint(&alert_bufs[1], "approval {d}", .{node.approvals.len}) catch "";
+        if (s.len > 0) try alert_segments.append(alloc, s);
     }
     if (node.degraded) |reason| {
-        if (has_metadata) try metadata.writer.writeAll(" · ");
-        try metadata.writer.print("degraded {s}", .{@tagName(reason)});
-        has_metadata = true;
+        const s = std.fmt.bufPrint(&alert_bufs[2], "degraded {s}", .{@tagName(reason)}) catch "";
+        if (s.len > 0) try alert_segments.append(alloc, s);
     }
+
+    const has_usage = node.usage.input_tokens != null or
+        node.usage.output_tokens != null or
+        node.usage.total_cost != null or
+        node.usage.last_activity_ms != null;
+
+    const now_ms = io_mod.milliTimestamp();
+    var tok_buf: [32]u8 = undefined;
+    var cost_buf: [32]u8 = undefined;
+    var age_buf: [32]u8 = undefined;
+
+    const total_tokens: ?u64 = if (node.usage.input_tokens != null or node.usage.output_tokens != null)
+        (node.usage.input_tokens orelse 0) + (node.usage.output_tokens orelse 0)
+    else
+        null;
+    const tok_str = formatCompactTokens(&tok_buf, total_tokens);
+    const cost_str = formatCost(&cost_buf, node.usage.total_cost);
+    const age_str = formatAge(&age_buf, now_ms, node.usage.last_activity_ms);
+
+    const usage_segments = [_][]const u8{ tok_str, cost_str, age_str };
 
     try row.appendSlice(alloc, if (selected) ui_render.selected_completion_style else ui_render.reset_style);
     try row.appendSlice(alloc, if (selected) "› " else "  ");
@@ -4500,15 +4601,50 @@ fn composeNodeRow(
     const show_status = width >= prefix_width + status_width + 4;
     const left_limit = if (show_status) width - status_width - 3 else width;
     const available = left_limit -| prefix_width;
-    const metadata_width = display_width.visibleWidth(metadata.written());
-    const show_metadata = has_metadata and available >= metadata_width + 10;
-    const name_budget = available -| if (show_metadata) metadata_width + 2 else 0;
+
+    var meta_line: std.ArrayList(u8) = .empty;
+    defer meta_line.deinit(alloc);
+
+    var usage_items_to_show: usize = if (has_usage) 3 else 0;
+    while (true) {
+        meta_line.clearRetainingCapacity();
+        var has_item = false;
+        for (alert_segments.items) |alert| {
+            if (has_item) try meta_line.appendSlice(alloc, " · ");
+            try meta_line.appendSlice(alloc, alert);
+            has_item = true;
+        }
+        if (has_usage) {
+            for (usage_segments[0..usage_items_to_show]) |u_item| {
+                if (has_item) try meta_line.appendSlice(alloc, " · ");
+                try meta_line.appendSlice(alloc, u_item);
+                has_item = true;
+            }
+        }
+
+        const meta_w = display_width.visibleWidth(meta_line.items);
+        if (has_item and available >= meta_w + 10) {
+            break;
+        }
+        if (usage_items_to_show == 0) {
+            if (!has_item or available < meta_w + 10) {
+                meta_line.clearRetainingCapacity();
+            }
+            break;
+        }
+        usage_items_to_show -= 1;
+    }
+    const meta_text = meta_line.items;
+    const meta_width = display_width.visibleWidth(meta_text);
+    const show_metadata = meta_text.len > 0 and available >= meta_width + 2;
+    const name_budget = available -| if (show_metadata) meta_width + 2 else 0;
     try row_text.appendSingleLineMiddleEllipsized(alloc, row, safe_name.bytes, name_budget);
     try row.appendSlice(alloc, ui_render.reset_style);
+
     if (show_metadata) {
         try row.appendSlice(alloc, "  ");
         try row.appendSlice(alloc, ui_render.dim_style);
-        try row.appendSlice(alloc, metadata.written());
+        try row.appendSlice(alloc, meta_text);
         try row.appendSlice(alloc, ui_render.reset_style);
     }
     if (show_status) {
@@ -4661,6 +4797,37 @@ fn paintChild(
         try writeSafeLabeledLine(alloc, writer, cols, row, limit, "Latest failure: ", reason);
     }
     try writeFormattedLine(alloc, writer, cols, row, limit, "Recent activity: {d}  •  unread: {d}{s}  •  approvals: {d}", .{ node.activity.len, node.unread_count, if (node.unread_truncated) "+" else "", node.approvals.len });
+    try writeLine(alloc, writer, cols, row, limit, "");
+    try writeLine(alloc, writer, cols, row, limit, "Usage:");
+
+    var tok_detail_buf: [64]u8 = undefined;
+    const tok_detail = formatTokensDetail(&tok_detail_buf, node.usage.input_tokens, node.usage.output_tokens);
+    try writeFormattedLine(alloc, writer, cols, row, limit, "  Tokens: {s}", .{tok_detail});
+
+    if (node.usage.total_cost) |cost| {
+        try writeFormattedLine(alloc, writer, cols, row, limit, "  Cost: ${d:.4}", .{cost});
+    } else {
+        try writeLine(alloc, writer, cols, row, limit, "  Cost: —");
+    }
+
+    var req_buf: [32]u8 = undefined;
+    var turn_buf: [32]u8 = undefined;
+    var tools_buf: [32]u8 = undefined;
+    const req_str = if (node.usage.request_count) |v| std.fmt.bufPrint(&req_buf, "{d}", .{v}) catch "—" else "—";
+    const turn_str = if (node.usage.turn_count) |v| std.fmt.bufPrint(&turn_buf, "{d}", .{v}) catch "—" else "—";
+    const tools_str = if (node.usage.tool_call_count) |v| std.fmt.bufPrint(&tools_buf, "{d}", .{v}) catch "—" else "—";
+    try writeFormattedLine(alloc, writer, cols, row, limit, "  Requests: {s}  •  Turns: {s}  •  Tool calls: {s}", .{ req_str, turn_str, tools_str });
+
+    var fill_buf: [64]u8 = undefined;
+    const fill_str = formatContextFillDetail(&fill_buf, node.usage.context_fill_percent, node.usage.context_window);
+    try writeFormattedLine(alloc, writer, cols, row, limit, "  Context fill: {s}", .{fill_str});
+
+    const now_ms = io_mod.milliTimestamp();
+    var age_buf: [32]u8 = undefined;
+    const age_str = formatAge(&age_buf, now_ms, node.usage.last_activity_ms);
+    try writeFormattedLine(alloc, writer, cols, row, limit, "  Last activity: {s}", .{age_str});
+
+    try writeLine(alloc, writer, cols, row, limit, "");
     try writeLine(alloc, writer, cols, row, limit, "S Configure  •  X Actions");
     try writeLine(alloc, writer, cols, row, limit, "Press A for bounded activity or N for the latest notification/approval.");
 }
@@ -8921,4 +9088,172 @@ fn testLivePresentationWithRichTextEvent(
     alloc.free(live.events);
     live.events = events;
     return live;
+}
+test "formatCompactTokens formats scales and missing placeholder" {
+    var buf: [32]u8 = undefined;
+    try std.testing.expectEqualStrings("—", formatCompactTokens(&buf, null));
+    try std.testing.expectEqualStrings("0 tok", formatCompactTokens(&buf, 0));
+    try std.testing.expectEqualStrings("540 tok", formatCompactTokens(&buf, 540));
+    try std.testing.expectEqualStrings("12.5k tok", formatCompactTokens(&buf, 12500));
+    try std.testing.expectEqualStrings("1.2M tok", formatCompactTokens(&buf, 1200000));
+}
+
+test "formatCost formats sub-cent, standard, and missing placeholder" {
+    var buf: [32]u8 = undefined;
+    try std.testing.expectEqualStrings("—", formatCost(&buf, null));
+    try std.testing.expectEqualStrings("$0.00", formatCost(&buf, 0.0));
+    try std.testing.expectEqualStrings("$0.0035", formatCost(&buf, 0.0035));
+    try std.testing.expectEqualStrings("$0.05", formatCost(&buf, 0.05));
+    try std.testing.expectEqualStrings("$12.50", formatCost(&buf, 12.50));
+}
+
+test "formatAge formats elapsed intervals and missing placeholder" {
+    var buf: [32]u8 = undefined;
+    try std.testing.expectEqualStrings("—", formatAge(&buf, 10000, null));
+    try std.testing.expectEqualStrings("—", formatAge(&buf, 10000, 0));
+    try std.testing.expectEqualStrings("5s ago", formatAge(&buf, 15000, 10000));
+    try std.testing.expectEqualStrings("3m ago", formatAge(&buf, 190000, 10000));
+    try std.testing.expectEqualStrings("2h ago", formatAge(&buf, 7300000, 100000));
+    try std.testing.expectEqualStrings("3d ago", formatAge(&buf, 260000000, 100000));
+}
+
+test "roster row renders compact usage summary and degrades gracefully on narrow widths" {
+    const alloc = std.testing.allocator;
+    var runtime = Runtime{};
+    defer runtime.deinit(alloc);
+
+    var snapshot = try testSnapshot(alloc, 1, &.{"worker-agent"});
+    snapshot.nodes[0].usage = .{
+        .input_tokens = 10000,
+        .output_tokens = 2500,
+        .total_cost = 0.05,
+        .last_activity_ms = io_mod.milliTimestamp() - 5000,
+    };
+    try std.testing.expect(try runtime.replaceSnapshot(alloc, snapshot));
+
+    // Wide width: all usage items present (tokens, cost, age)
+    const wide = try paint(alloc, &runtime, .{ .rows = 10, .cols = 80, .content_bottom = 6, .divider_top_row = 7, .input_row = 8, .divider_bottom_row = 9, .hint_row = 10 }, null);
+    defer alloc.free(wide);
+    try std.testing.expect(std.mem.find(u8, wide, "12.5k tok") != null);
+    try std.testing.expect(std.mem.find(u8, wide, "$0.05") != null);
+    try std.testing.expect(std.mem.find(u8, wide, "s ago") != null);
+
+    // Medium width: drops trailing age, keeps tokens and cost
+    const medium = try paint(alloc, &runtime, .{ .rows = 10, .cols = 48, .content_bottom = 6, .divider_top_row = 7, .input_row = 8, .divider_bottom_row = 9, .hint_row = 10 }, null);
+    defer alloc.free(medium);
+    try std.testing.expect(std.mem.find(u8, medium, "12.5k tok") != null);
+    try std.testing.expect(std.mem.find(u8, medium, "$0.05") != null);
+
+    // Narrower width: drops cost as well, keeps tokens
+    const narrow = try paint(alloc, &runtime, .{ .rows = 10, .cols = 38, .content_bottom = 6, .divider_top_row = 7, .input_row = 8, .divider_bottom_row = 9, .hint_row = 10 }, null);
+    defer alloc.free(narrow);
+    try std.testing.expect(std.mem.find(u8, narrow, "12.5k tok") != null);
+
+    // Very narrow width: drops usage metadata entirely to preserve name budget without wrapping
+    const very_narrow = try paint(alloc, &runtime, .{ .rows = 10, .cols = 20, .content_bottom = 6, .divider_top_row = 7, .input_row = 8, .divider_bottom_row = 9, .hint_row = 10 }, null);
+    defer alloc.free(very_narrow);
+    try std.testing.expect(std.mem.find(u8, very_narrow, "wor…") != null or std.mem.find(u8, very_narrow, "worker-agent") != null);
+}
+
+test "roster row renders em-dash placeholders for missing usage data without fake zeros" {
+    const alloc = std.testing.allocator;
+    var runtime = Runtime{};
+    defer runtime.deinit(alloc);
+
+    var snapshot = try testSnapshot(alloc, 1, &.{"partial-agent"});
+    snapshot.nodes[0].usage = .{
+        .input_tokens = 5000,
+        .output_tokens = null,
+        .total_cost = null,
+        .last_activity_ms = null,
+    };
+    try std.testing.expect(try runtime.replaceSnapshot(alloc, snapshot));
+
+    const rendered = try paint(alloc, &runtime, .{ .rows = 10, .cols = 80, .content_bottom = 6, .divider_top_row = 7, .input_row = 8, .divider_bottom_row = 9, .hint_row = 10 }, null);
+    defer alloc.free(rendered);
+    try std.testing.expect(std.mem.find(u8, rendered, "500 tok") != null or std.mem.find(u8, rendered, "5.0k tok") != null);
+    try std.testing.expect(std.mem.find(u8, rendered, "—") != null);
+    try std.testing.expect(std.mem.find(u8, rendered, "$0.00") == null);
+}
+
+test "child detail view renders full usage block with metrics and em-dash placeholders" {
+    const alloc = std.testing.allocator;
+    var runtime = Runtime{};
+    defer runtime.deinit(alloc);
+
+    var snapshot = try testSnapshot(alloc, 1, &.{"full-detail-child"});
+    snapshot.nodes[0].usage = .{
+        .input_tokens = 12450,
+        .output_tokens = 3120,
+        .total_cost = 0.0482,
+        .request_count = 4,
+        .turn_count = 4,
+        .tool_call_count = 12,
+        .context_window = 200000,
+        .context_fill_percent = 6.225,
+        .last_activity_ms = io_mod.milliTimestamp() - 10000,
+    };
+    try std.testing.expect(try runtime.replaceSnapshot(alloc, snapshot));
+    try std.testing.expectEqual(Command.child_changed, try runtime.handle(alloc, .enter));
+
+    const detail = try paint(alloc, &runtime, .{ .rows = 24, .cols = 80, .content_bottom = 20, .divider_top_row = 21, .input_row = 22, .divider_bottom_row = 23, .hint_row = 24 }, null);
+    defer alloc.free(detail);
+    try std.testing.expect(std.mem.find(u8, detail, "Usage:") != null);
+    try std.testing.expect(std.mem.find(u8, detail, "Tokens: 12450 in · 3120 out (15570 total)") != null);
+    try std.testing.expect(std.mem.find(u8, detail, "Cost: $0.0482") != null);
+    try std.testing.expect(std.mem.find(u8, detail, "Requests: 4  •  Turns: 4  •  Tool calls: 12") != null);
+    try std.testing.expect(std.mem.find(u8, detail, "Context fill: 6.2% (200000 token window)") != null);
+    try std.testing.expect(std.mem.find(u8, detail, "Last activity:") != null);
+    try std.testing.expect(std.mem.find(u8, detail, "s ago") != null);
+}
+
+test "child detail view renders placeholders for missing metrics" {
+    const alloc = std.testing.allocator;
+    var runtime = Runtime{};
+    defer runtime.deinit(alloc);
+
+    var snapshot = try testSnapshot(alloc, 1, &.{"sparse-child"});
+    snapshot.nodes[0].usage = .{};
+    try std.testing.expect(try runtime.replaceSnapshot(alloc, snapshot));
+    try std.testing.expectEqual(Command.child_changed, try runtime.handle(alloc, .enter));
+
+    const detail = try paint(alloc, &runtime, .{ .rows = 24, .cols = 80, .content_bottom = 20, .divider_top_row = 21, .input_row = 22, .divider_bottom_row = 23, .hint_row = 24 }, null);
+    defer alloc.free(detail);
+    try std.testing.expect(std.mem.find(u8, detail, "Tokens: —") != null);
+    try std.testing.expect(std.mem.find(u8, detail, "Cost: —") != null);
+    try std.testing.expect(std.mem.find(u8, detail, "Requests: —  •  Turns: —  •  Tool calls: —") != null);
+    try std.testing.expect(std.mem.find(u8, detail, "Context fill: —") != null);
+    try std.testing.expect(std.mem.find(u8, detail, "Last activity: —") != null);
+}
+
+test "header aggregates tokens and cost across live children" {
+    const alloc = std.testing.allocator;
+    var runtime = Runtime{};
+    defer runtime.deinit(alloc);
+
+    var snapshot = try testSnapshot(alloc, 1, &.{ "child-a", "child-b", "child-archived" });
+    snapshot.nodes[0].usage = .{
+        .input_tokens = 10000,
+        .output_tokens = 2000,
+        .total_cost = 0.04,
+    };
+    snapshot.nodes[1].usage = .{
+        .input_tokens = 20000,
+        .output_tokens = 4000,
+        .total_cost = 0.08,
+    };
+    snapshot.nodes[2].state = .archived;
+    snapshot.nodes[2].usage = .{
+        .input_tokens = 50000,
+        .output_tokens = 50000,
+        .total_cost = 10.0,
+    };
+    try std.testing.expect(try runtime.replaceSnapshot(alloc, snapshot));
+
+    const rendered = try paint(alloc, &runtime, .{ .rows = 14, .cols = 80, .content_bottom = 10, .divider_top_row = 11, .input_row = 12, .divider_bottom_row = 13, .hint_row = 14 }, null);
+    defer alloc.free(rendered);
+    // Aggregate across the 2 live children = 36.0k tokens, $0.12
+    try std.testing.expect(std.mem.find(u8, rendered, "Agents 2") != null);
+    try std.testing.expect(std.mem.find(u8, rendered, "36.0k tok") != null);
+    try std.testing.expect(std.mem.find(u8, rendered, "$0.12") != null);
 }

@@ -290,7 +290,7 @@ pub noinline fn ansiSequenceEnd(text: []const u8, index: usize) usize {
         return text.len;
     }
 
-    if (kind == ']') {
+    if (kind == ']' or kind == '_' or kind == 'P' or kind == '^') {
         var i = index + 2;
         while (i < text.len) : (i += 1) {
             if (text[i] == 0x07) return i + 1;
@@ -298,7 +298,6 @@ pub noinline fn ansiSequenceEnd(text: []const u8, index: usize) usize {
         }
         return text.len;
     }
-
     return @min(index + 2, text.len);
 }
 
@@ -547,6 +546,10 @@ test "ansiSequenceEnd preserves current CSI OSC and ESC boundaries" {
 
     const bare_escape = "\x1b";
     try std.testing.expectEqual(bare_escape.len, ansiSequenceEnd(bare_escape, 0));
+
+    const kitty_apc = "\x1b_Ga=T,f=100;payload\x1b\\tail";
+    try std.testing.expectEqual(@as(usize, 22), ansiSequenceEnd(kitty_apc, 0));
+    try std.testing.expectEqual(@as(usize, 4), visibleWidthIgnoringAnsi(kitty_apc));
 }
 
 test "previousRuneStart preserves byte-boundary behavior" {

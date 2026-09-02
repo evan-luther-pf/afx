@@ -28,6 +28,7 @@ pub const default_dark_theme = theme_mod.default_dark_theme;
 pub const default_light_theme = theme_mod.default_light_theme;
 pub const loadTheme = theme_mod.loadTheme;
 pub const listAvailableThemes = theme_mod.listAvailableThemes;
+pub const image_protocol = @import("terminal/image_protocol.zig");
 const user_message_card = @import("assistant/user_message_card.zig");
 const code_highlight = @import("render_engine/code_highlight.zig");
 pub const welcome_message_reserved_rows: u16 = 11;
@@ -63,8 +64,7 @@ pub var selected_completion_style: []const u8 = "\x1b[1;38;5;255m";
 pub var permission_auto_style: []const u8 = "\x1b[38;5;252m";
 var active_terminal_background: ?TerminalRgb = null;
 
-var truecolor_enabled: bool = true;
-
+pub var truecolor_enabled: bool = true;
 pub fn setTruecolorSupport(enabled: bool) void {
     truecolor_enabled = enabled;
 }
@@ -218,6 +218,7 @@ pub fn initThemeNamed(theme_name: []const u8, light: bool, terminal_bg: ?Termina
     }
     const theme = theme_mod.loadTheme(std.heap.c_allocator, home, effective_name, light);
     applyTheme(&theme, light, terminal_bg);
+    user_message_card.setGraphicsProtocol(image_protocol.detectGraphicsProtocol(), true);
 }
 pub fn themeNeedsUpdate(light: bool, terminal_bg: ?TerminalRgb) bool {
     if (light != is_light) return true;
