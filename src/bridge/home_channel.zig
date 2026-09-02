@@ -179,6 +179,7 @@ pub const HomeChannelServer = struct {
         self.running.store(false, .seq_cst);
 
         if (self.server_fd) |fd| {
+            _ = posix.system.shutdown(fd, posix.system.SHUT.RDWR);
             _ = std.c.close(fd);
             self.server_fd = null;
         }
@@ -187,7 +188,7 @@ pub const HomeChannelServer = struct {
 
         self.clients_mutex.lockUncancelable(io_mod.getIo());
         for (self.client_fds.items) |cfd| {
-            _ = std.c.close(cfd);
+            _ = posix.system.shutdown(cfd, posix.system.SHUT.RDWR);
         }
         self.client_fds.clearRetainingCapacity();
         self.clients_mutex.unlock(io_mod.getIo());
