@@ -233,10 +233,23 @@ Bridge settings live in `~/.afx/bridge.json` (mode 0600):
       "app_token_env": "SLACK_APP_TOKEN",
       "bot_token_env": "SLACK_BOT_TOKEN",
       "allow_users": ["U12345678"]
+    },
+    "telegram": {
+      "token_env": "TELEGRAM_BOT_TOKEN",
+      "allow_users": [123456789],
+      "groups": "mention"
     }
   }
 }
 ```
+
+#### Telegram connector
+
+1. Create a bot using [@BotFather](https://t.me/botfather) on Telegram and copy the API token.
+2. Set the token environment variable named in `token_env` (e.g. `export TELEGRAM_BOT_TOKEN="123456:ABC-DEF..."`).
+3. Add authorized Telegram user IDs to `allow_users` (or run `afx bridge pair telegram` to authenticate via direct message pairing code).
+4. Group messages require `@<botusername>` mention or direct reply to the bot when `groups` is set to `"mention"`.
+5. Forum topics (message thread IDs) are automatically mapped and preserved per topic.
 ## Updates
 
 afx checks [GitHub Releases](https://github.com/evan-luther-pf/afx/releases) for new versions. When an update is ready, press `Ctrl+G` to reload into it.
