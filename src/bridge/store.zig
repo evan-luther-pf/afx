@@ -348,22 +348,12 @@ pub const Store = struct {
     }
 };
 
-fn resolveDirRealPath(alloc: std.mem.Allocator, dir: std.Io.Dir) ![]u8 {
-    var path_buf: [4096]u8 = undefined;
-    const len = std.c.fcntl(dir.handle, std.c.F.GETPATH, &path_buf);
-    if (len >= 0) {
-        const slice = std.mem.sliceTo(&path_buf, 0);
-        return try alloc.dupe(u8, slice);
-    }
-    return error.PathResolutionFailed;
-}
-
 test "bridge store lifecycle" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
     const alloc = std.testing.allocator;
-    const dir_path = try resolveDirRealPath(alloc, tmp.dir);
+    const dir_path = try io_mod.dirRealpathAlloc(alloc, tmp.dir, ".");
     defer alloc.free(dir_path);
     const store_path = try std.fmt.allocPrint(alloc, "{s}/conversations.json", .{dir_path});
     defer alloc.free(store_path);
@@ -436,7 +426,7 @@ test "bridge store rejects malformed JSON" {
     defer tmp.cleanup();
 
     const alloc = std.testing.allocator;
-    const dir_path = try resolveDirRealPath(alloc, tmp.dir);
+    const dir_path = try io_mod.dirRealpathAlloc(alloc, tmp.dir, ".");
     defer alloc.free(dir_path);
     const store_path = try std.fmt.allocPrint(alloc, "{s}/bad.json", .{dir_path});
     defer alloc.free(store_path);
