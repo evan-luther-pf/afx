@@ -1,0 +1,4 @@
+#!/bin/sh
+# Stub osascript for afx bridge e2e tests
+echo "$@" >> "${FAKE_OSASCRIPT_LOG:-/tmp/fake_osascript.log}"
+exit 0

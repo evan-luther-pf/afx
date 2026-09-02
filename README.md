@@ -238,6 +238,12 @@ Bridge settings live in `~/.afx/bridge.json` (mode 0600):
       "token_env": "TELEGRAM_BOT_TOKEN",
       "allow_users": [123456789],
       "groups": "mention"
+    },
+    "imsg": {
+      "allow_handles": ["+15551234567", "user@example.com"],
+      "poll_interval_ms": 2000,
+      "db_path": "~/Library/Messages/chat.db",
+      "group_prefix": "@afx"
     }
   }
 }
@@ -250,6 +256,31 @@ Bridge settings live in `~/.afx/bridge.json` (mode 0600):
 3. Add authorized Telegram user IDs to `allow_users` (or run `afx bridge pair telegram` to authenticate via direct message pairing code).
 4. Group messages require `@<botusername>` mention or direct reply to the bot when `groups` is set to `"mention"`.
 5. Forum topics (message thread IDs) are automatically mapped and preserved per topic.
+
+### iMessage setup (macOS)
+
+The iMessage bridge connects to local Messages via read-only SQLite polling of `chat.db` and AppleScript dispatch.
+
+#### Required permissions
+
+1. **Full Disk Access**: Grant Full Disk Access in *System Settings > Privacy & Security > Full Disk Access* to your terminal emulator or AFX binary so it can read `~/Library/Messages/chat.db`.
+2. **Automation**: Allow AFX/Terminal to control `Messages.app` when prompted by macOS Automation security dialogs (or enable under *System Settings > Privacy & Security > Automation*).
+
+#### Configuration
+
+Add an `imsg` connector block under `connectors` in `~/.afx/bridge.json`:
+
+- `allow_handles`: required allowlist of sender phone numbers or email addresses. Phone numbers and emails are normalized by stripping spaces, dashes, and parentheses.
+- `poll_interval_ms`: polling interval in milliseconds (default: 2000).
+- `db_path`: path to Messages `chat.db` (default: `~/Library/Messages/chat.db`).
+- `group_prefix`: prefix required for group messages (default: `@afx`). Group chats whose GUID starts with `iMessage;+;` only trigger responses when the inbound message begins with this prefix.
+
+#### Limitations
+
+- **macOS only**: requires macOS Messages database and AppleScript automation.
+- **Existing chats only**: AFX replies within existing chat threads (`to chat id <guid>`). Initiating new conversations to arbitrary handles without an established chat is out of scope.
+- **Typedstream text extraction**: extracting text from rich `attributedBody` blobs uses a best-effort typedstream heuristic for NSString payloads; messages with complex attachments may not decode text if the raw `text` field is null.
+- **No rich controls**: iMessage does not support interactive buttons or message edits. Tool approval requests send numbered text prompts (reply `1` to allow once, `2` to allow for session, `3` to deny).
 ## Updates
 
 afx checks [GitHub Releases](https://github.com/evan-luther-pf/afx/releases) for new versions. When an update is ready, press `Ctrl+G` to reload into it.

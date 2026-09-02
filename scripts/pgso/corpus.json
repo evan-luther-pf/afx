@@ -129,6 +129,7 @@
     {"name": "verify-yolo-permission-mode", "argv": ["bun", "test", "--max-concurrency", "1", "./yolo-permission-mode.test.ts"], "test_file": "yolo-permission-mode.test.ts"},
     {"name": "verify-bridge", "argv": ["bun", "test", "--max-concurrency", "1", "./bridge.test.ts"], "test_file": "bridge.test.ts", "requires_tmux": false},
     {"name": "verify-bridge-slack", "argv": ["bun", "test", "--max-concurrency", "1", "./bridge-slack.test.ts"], "test_file": "bridge-slack.test.ts", "requires_tmux": false},
-    {"name": "verify-bridge-telegram", "argv": ["bun", "test", "--max-concurrency", "1", "./bridge-telegram.test.ts"], "test_file": "bridge-telegram.test.ts", "requires_tmux": false}
+    {"name": "verify-bridge-telegram", "argv": ["bun", "test", "--max-concurrency", "1", "./bridge-telegram.test.ts"], "test_file": "bridge-telegram.test.ts", "requires_tmux": false},
+    {"name": "verify-bridge-imsg", "argv": ["bun", "test", "--max-concurrency", "1", "./bridge-imsg.test.ts"], "test_file": "bridge-imsg.test.ts", "requires_tmux": false}
   ]
 }

@@ -35,9 +35,11 @@ pub const TelegramConfig = struct {
     groups: GroupMode = .mention,
     disabled_no_allowlist: bool = false,
 };
-
 pub const ImsgConfig = struct {
     allow_handles: []const []const u8,
+    poll_interval_ms: u32 = 2000,
+    db_path: ?[]const u8 = null,
+    group_prefix: []const u8 = "@afx",
     disabled_no_allowlist: bool = false,
 };
 pub const FakeConfig = struct {
@@ -288,7 +290,6 @@ pub fn parse(alloc: std.mem.Allocator, value: std.json.Value) !BridgeConfig {
                 };
             } else if (t_val != .null) return error.InvalidBridgeConfigJson;
         }
-
         // imsg
         if (conns.get("imsg")) |i_val| {
             if (i_val == .object) {
@@ -302,16 +303,40 @@ pub fn parse(alloc: std.mem.Allocator, value: std.json.Value) !BridgeConfig {
                     }
                 }
 
+                var poll_interval_ms: u32 = 2000;
+                if (i_obj.get("poll_interval_ms")) |p_val| {
+                    if (p_val == .integer) {
+                        if (p_val.integer < 1) return error.InvalidBridgeConfigJson;
+                        poll_interval_ms = @intCast(p_val.integer);
+                    } else return error.InvalidBridgeConfigJson;
+                }
+
+                var db_path: ?[]const u8 = null;
+                if (i_obj.get("db_path")) |d_val| {
+                    if (d_val == .string) {
+                        db_path = try arena_alloc.dupe(u8, d_val.string);
+                    } else if (d_val != .null) return error.InvalidBridgeConfigJson;
+                }
+
+                var group_prefix: []const u8 = "@afx";
+                if (i_obj.get("group_prefix")) |g_val| {
+                    if (g_val == .string) {
+                        group_prefix = try arena_alloc.dupe(u8, g_val.string);
+                    } else return error.InvalidBridgeConfigJson;
+                }
+
                 const handles_slice = try allow_handles.toOwnedSlice(arena_alloc);
                 const disabled = (handles_slice.len == 0);
 
                 config.connectors.imsg = .{
                     .allow_handles = handles_slice,
+                    .poll_interval_ms = poll_interval_ms,
+                    .db_path = db_path,
+                    .group_prefix = group_prefix,
                     .disabled_no_allowlist = disabled,
                 };
             } else if (i_val != .null) return error.InvalidBridgeConfigJson;
         }
-
         // fake
         if (conns.get("fake")) |f_val| {
             if (f_val == .object) {
@@ -405,9 +430,11 @@ test "config: full config parsing" {
     const imsg = cfg.connectors.imsg orelse return error.TestExpectedNonNull;
     try std.testing.expectEqual(@as(usize, 1), imsg.allow_handles.len);
     try std.testing.expectEqualStrings("alice@example.com", imsg.allow_handles[0]);
+    try std.testing.expectEqual(@as(u32, 2000), imsg.poll_interval_ms);
+    try std.testing.expect(imsg.db_path == null);
+    try std.testing.expectEqualStrings("@afx", imsg.group_prefix);
     try std.testing.expectEqual(false, imsg.disabled_no_allowlist);
 }
-
 test "config: defaults" {
     const alloc = std.testing.allocator;
     const json_text = "{\"bridge\": {}}";

@@ -18,6 +18,7 @@ const Conversation = router_mod.Conversation;
 const InboundMessage = router_mod.InboundMessage;
 const markup_mod = @import("markup.zig");
 const chunker_mod = @import("chunker.zig");
+const imsg_mod = @import("connectors/imsg.zig");
 const approvals_mod = @import("approvals.zig");
 const Approvals = approvals_mod.Approvals;
 const commands_mod = @import("commands.zig");
@@ -459,10 +460,7 @@ pub const Runtime = struct {
             if (self.config.connectors.imsg) |i| {
                 if (i.disabled_no_allowlist and !self.hasActivePairingCode("imsg")) return false;
                 if (i.allow_handles.len == 0) return self.hasActivePairingCode("imsg");
-                for (i.allow_handles) |allowed| {
-                    if (std.mem.eql(u8, allowed, user)) return true;
-                }
-                return false;
+                return imsg_mod.isHandleAllowed(self.alloc, i.allow_handles, user);
             }
         }
         return true;
