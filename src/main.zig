@@ -4416,6 +4416,7 @@ test {
     _ = @import("bridge/connectors/fake.zig");
     _ = @import("bridge/connectors/slack_api.zig");
     _ = @import("bridge/connectors/slack.zig");
+    _ = @import("bridge/connectors/telegram.zig");
     _ = @import("bridge/router.zig");
     _ = @import("bridge/commands.zig");
     _ = @import("bridge/runtime.zig");

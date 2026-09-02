@@ -12,6 +12,7 @@ const ApprovalPrompt = connector_mod.ApprovalPrompt;
 const Decision = connector_mod.Decision;
 const EventSink = connector_mod.EventSink;
 const slack_mod = @import("connectors/slack.zig");
+const telegram_mod = @import("connectors/telegram.zig");
 const config_mod = @import("config.zig");
 const BridgeConfig = config_mod.BridgeConfig;
 const runtime_mod = @import("runtime.zig");
@@ -632,6 +633,9 @@ pub fn handleBridgeCli(
         var slack_conn: ?*slack_mod.SlackConnector = null;
         defer if (slack_conn) |sc| sc.deinit();
 
+        var telegram_conn: ?*telegram_mod.TelegramConnector = null;
+        defer if (telegram_conn) |tc| tc.deinit();
+
         if (use_fake) {
             var can_start_fake = true;
             if (bridge_config.connectors.fake) |fake_cfg| {
@@ -646,23 +650,40 @@ pub fn handleBridgeCli(
                 try deps.writeStderr("Connector 'fake' is disabled: allowlist is empty and no active pairing code exists. Run 'afx bridge pair fake' first.\n");
                 return .handled_failure;
             }
-        } else if (only_connector == null or std.mem.eql(u8, only_connector.?, "slack")) {
-            if (bridge_config.connectors.slack) |slack_cfg| {
-                if (config_mod.resolveSlackTokens(slack_cfg, io_mod.getenv)) |tokens| {
-                    slack_conn = try slack_mod.SlackConnector.init(
-                        alloc,
-                        io_mod.getIo(),
-                        "slack",
-                        slack_cfg,
-                        tokens.app_token,
-                        tokens.bot_token,
-                        null,
-                    );
-                    try connector_list.append(alloc, slack_conn.?.connector());
-                } else |_| {}
+        } else {
+            if (only_connector == null or std.mem.eql(u8, only_connector.?, "slack")) {
+                if (bridge_config.connectors.slack) |slack_cfg| {
+                    if (config_mod.resolveSlackTokens(slack_cfg, io_mod.getenv)) |tokens| {
+                        slack_conn = try slack_mod.SlackConnector.init(
+                            alloc,
+                            io_mod.getIo(),
+                            "slack",
+                            slack_cfg,
+                            tokens.app_token,
+                            tokens.bot_token,
+                            null,
+                        );
+                        try connector_list.append(alloc, slack_conn.?.connector());
+                    } else |_| {}
+                }
+            }
+            if (only_connector == null or std.mem.eql(u8, only_connector.?, "telegram")) {
+                if (bridge_config.connectors.telegram) |telegram_cfg| {
+                    if (config_mod.resolveTelegramToken(telegram_cfg, io_mod.getenv)) |token_res| {
+                        telegram_conn = try telegram_mod.TelegramConnector.init(
+                            alloc,
+                            io_mod.getIo(),
+                            "telegram",
+                            telegram_cfg,
+                            token_res.token,
+                            null,
+                            null,
+                        );
+                        try connector_list.append(alloc, telegram_conn.?.connector());
+                    } else |_| {}
+                }
             }
         }
-
         if (connector_list.items.len == 0) {
             // If explicit connector was requested or configured, fail
             if (only_connector != null or bridge_config.connectors.fake != null or bridge_config.connectors.slack != null or bridge_config.connectors.telegram != null or bridge_config.connectors.imsg != null) {
@@ -681,6 +702,10 @@ pub fn handleBridgeCli(
             connector_list.items,
             paths.store_file,
         );
+
+        if (telegram_conn) |tc| {
+            tc.setStore(&runtime.store);
+        }
         defer runtime.deinit();
 
         // Write PID file
