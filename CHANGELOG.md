@@ -1,8 +1,36 @@
 # afx
 
-## 0.0.10
+## 0.1.0
 
 <!-- release:start -->
+
+### New Features
+
+- **Full-transcript search:** Press `/` in the transcript review screen to search incrementally, jump between matches with `n` and `N`, and clear with `Esc`
+- **Prompt history search:** Press `Ctrl+R` in the composer to fuzzy-search prompt history, recall an entry with `Enter`, or restore the draft with `Esc`
+- **External editor:** Press `Alt+E` to edit the current draft in `$VISUAL` or `$EDITOR` and return to the composer
+- **Configurable keybindings:** Remap or disable composer and app shortcuts in `~/.afx/keybindings.json` and inspect active bindings with `/hotkeys`
+- **Custom themes:** Define color themes in `~/.afx/themes/<name>.json` and select them in `/settings`; missing tokens fall back to the built-in palettes
+- **Inline images:** Image attachments render as real graphics in iTerm2, WezTerm, Ghostty, and kitty while on screen, with textual badges in tmux and scrollback
+- **Desktop notifications:** Emit OSC 9 desktop notifications on turn completion and approval requests, following the `/sound` setting
+- **Checkpoint and rewind:** The agent can set a checkpoint before an investigation and later rewind, replacing exploratory context with a findings report while the full history stays on disk
+- **Magic keywords:** Standalone `ultrathink` or `orchestrate` in a prompt highlights in the composer and adds a hidden instruction for that turn
+- **Session export and dump:** `/export [path]` writes the session as a self-contained HTML file and `/dump` copies the model-facing context to the clipboard with a JSON sidecar
+- **Session fork:** `/fork` duplicates the current session into a new independent session
+- **Subagent usage metrics:** The subagent manager shows per-agent tokens, cost, request and tool-call counts, context fill, and last activity
+
+### Improvements
+
+- **Status line cost and git:** Optional `/statusline cost` and `/statusline git` segments show cumulative session spend and the current branch with a dirty marker
+
+### Bug Fixes
+
+- **Session switch recovery:** Session switches no longer strand the conversation when flushing pending writes fails
+- **ACP session listing:** Non-resumable ACP sessions are hidden from session listings and image snapshots persist durably across resumes
+
+<!-- release:end -->
+
+## 0.0.10
 
 ### Improvements
 
@@ -12,8 +40,6 @@
 
 - **LSP diagnostic freshness:** Ignore versioned diagnostic notifications older than the active document or newer cached result
 - **Isolated symlinks:** Preserve untracked symbolic links in isolated task worktrees without following or copying their targets
-
-<!-- release:end -->
 
 ## 0.0.9
 
