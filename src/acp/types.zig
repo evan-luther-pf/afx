@@ -2,6 +2,7 @@ const std = @import("std");
 const build_options = @import("build_options");
 const jsonrpc = @import("jsonrpc.zig");
 const core_types = @import("../core/shared/types.zig");
+const session_host_types = @import("../core/session_host/types.zig");
 
 const Allocator = std.mem.Allocator;
 const writeJsonStr = jsonrpc.writeJsonStr;
@@ -58,65 +59,9 @@ pub fn writeModelRecoveryInfoUpdate(
     try writer.writeAll("}}}}");
 }
 
-pub const StopReason = enum {
-    end_turn,
-    max_output_tokens,
-    max_model_turns,
-    refused,
-    cancelled,
-
-    pub fn jsonString(self: StopReason) []const u8 {
-        return switch (self) {
-            .end_turn => "end_turn",
-            .max_output_tokens => "max_output_tokens",
-            .max_model_turns => "max_model_turns",
-            .refused => "refused",
-            .cancelled => "cancelled",
-        };
-    }
-};
-
-pub const ToolCallKind = enum {
-    read,
-    edit,
-    delete,
-    move,
-    search,
-    execute,
-    think,
-    fetch,
-    other,
-
-    pub fn jsonString(self: ToolCallKind) []const u8 {
-        return switch (self) {
-            .read => "read",
-            .edit => "edit",
-            .delete => "delete",
-            .move => "move",
-            .search => "search",
-            .execute => "execute",
-            .think => "think",
-            .fetch => "fetch",
-            .other => "other",
-        };
-    }
-};
-
-pub const ToolCallStatus = enum {
-    pending,
-    in_progress,
-    completed,
-    failed,
-
-    pub fn jsonString(self: ToolCallStatus) []const u8 {
-        return switch (self) {
-            .pending => "pending",
-            .in_progress => "in_progress",
-            .completed => "completed",
-            .failed => "failed",
-        };
-    }
-};
+pub const StopReason = session_host_types.StopReason;
+pub const ToolCallKind = session_host_types.ToolCallKind;
+pub const ToolCallStatus = session_host_types.ToolCallStatus;
 
 pub fn writeSessionUpdate(w: *std.Io.Writer, session_id: []const u8, update_json: []const u8) !void {
     try w.writeAll("{\"sessionId\":");
