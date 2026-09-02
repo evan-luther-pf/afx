@@ -48,11 +48,17 @@ const terminal = await createFxTerminal({ nativeAddon: nativeUrl, marker: 2 });
 assert.equal(terminal.backend, "native-terminal");
 assert.equal(terminal.options.marker, 2);
 
-await assert.rejects(
-  createFxAgent({ nativeAddon: nativeUrl, backend: "wasm" }),
-  (error) => error?.code === "LIBFX_JSPI_REQUIRED" &&
-    error.message.includes("--experimental-wasm-jspi"),
-);
+const suspending = WebAssembly.Suspending;
+WebAssembly.Suspending = undefined;
+try {
+  await assert.rejects(
+    createFxAgent({ nativeAddon: nativeUrl, backend: "wasm" }),
+    (error) => error?.code === "LIBFX_JSPI_REQUIRED" &&
+      error.message.includes("--experimental-wasm-jspi"),
+  );
+} finally {
+  WebAssembly.Suspending = suspending;
+}
 
 const coreOnlyPath = resolve(dir, "core-only.mjs");
 await writeFile(coreOnlyPath, `
