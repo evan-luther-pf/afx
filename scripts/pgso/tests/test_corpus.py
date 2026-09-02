@@ -70,6 +70,8 @@ VERIFICATION_E2E_TESTS = (
     "web-fetch-permission-progress.test.ts",
     "web-search-permission-progress.test.ts",
     "yolo-permission-mode.test.ts",
+    "bridge.test.ts",
+    "bridge-slack.test.ts",
 )
 
 EXCLUDED_E2E_TESTS = (
@@ -365,7 +367,7 @@ class PgsoCorpusTests(unittest.TestCase):
             tuple(test_file for test_file, _ in corpus.intentional_exclusions),
         )
         self.assertEqual(36, len(corpus.scenarios))
-        self.assertEqual(53, len(corpus.candidate_scenarios))
+        self.assertEqual(55, len(corpus.candidate_scenarios))
         self.assertEqual(
             100,
             next(

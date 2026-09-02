@@ -202,6 +202,9 @@ pub const Runtime = struct {
         self.store.deinit();
 
         self.queue_mutex.lockUncancelable(io_mod.getIo());
+        for (self.queue.items) |event| {
+            event.deinit(self.alloc);
+        }
         self.queue.deinit(self.alloc);
         self.queue_mutex.unlock(io_mod.getIo());
 
@@ -326,10 +329,13 @@ pub const Runtime = struct {
 
     pub fn pushInbound(ctx: *anyopaque, event: Inbound) anyerror!void {
         const self: *Runtime = @ptrCast(@alignCast(ctx));
+        const owned_event = try event.clone(self.alloc);
+        errdefer owned_event.deinit(self.alloc);
+
         self.queue_mutex.lockUncancelable(io_mod.getIo());
         defer self.queue_mutex.unlock(io_mod.getIo());
 
-        try self.queue.append(self.alloc, event);
+        try self.queue.append(self.alloc, owned_event);
         self.queue_cond.signal(io_mod.getIo());
     }
 
@@ -433,6 +439,7 @@ pub const Runtime = struct {
             self.queue_mutex.unlock(io_mod.getIo());
 
             if (maybe_event) |event| {
+                defer event.deinit(self.alloc);
                 self.processInboundEvent(event) catch {};
             }
         }

@@ -271,6 +271,18 @@ pub const top_level_specs = [_]TopLevelSpec{
             "Additional directories are stored for the current primary workspace.",
         },
     },
+    .{
+        .kind = .bridge,
+        .token = "bridge",
+        .usage = "bridge start|stop|status [--json]|pair <connector>",
+        .summary = "Run or manage the chat bridge daemon",
+        .options = &.{
+            .{ .flag = "start [--connector <name>] [--daemon]", .description = "Start bridge runtime" },
+            .{ .flag = "stop", .description = "Stop bridge daemon" },
+            .{ .flag = "status [--json]", .description = "Show bridge status" },
+            .{ .flag = "pair <connector>", .description = "Generate pairing code" },
+        },
+    },
 };
 
 pub const top_level_help_default_width = command_specs.top_level_help_default_width;
@@ -310,6 +322,7 @@ pub const top_level_help_groups = [_]TopLevelHelpGroup{
         .{ .kind = .workspace, .usage = "workspace" },
         .{ .kind = .upgrade, .usage = "upgrade" },
         .{ .kind = .acp, .usage = "acp" },
+        .{ .kind = .bridge, .usage = "bridge" },
         .{ .kind = .help, .usage = "help" },
     } },
 };

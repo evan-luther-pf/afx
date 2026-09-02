@@ -80,6 +80,88 @@ pub const Inbound = union(enum) {
         request_id: []const u8,
         decision: Decision,
     },
+
+    pub fn clone(self: Inbound, alloc: std.mem.Allocator) !Inbound {
+        switch (self) {
+            .message => |m| {
+                const conv_dup = try m.conv.clone(alloc);
+                errdefer conv_dup.deinit(alloc);
+                const user_dup = try alloc.dupe(u8, m.user);
+                errdefer alloc.free(user_dup);
+                const text_dup = try alloc.dupe(u8, m.text);
+                errdefer alloc.free(text_dup);
+                const platform_msg_id_dup = try alloc.dupe(u8, m.platform_msg_id);
+                errdefer alloc.free(platform_msg_id_dup);
+
+                var att_list: std.ArrayListUnmanaged(Attachment) = .empty;
+                errdefer {
+                    for (att_list.items) |a| {
+                        alloc.free(a.name);
+                        alloc.free(a.bytes);
+                        alloc.free(a.media_type);
+                    }
+                    att_list.deinit(alloc);
+                }
+                for (m.attachments) |a| {
+                    try att_list.append(alloc, .{
+                        .kind = a.kind,
+                        .name = try alloc.dupe(u8, a.name),
+                        .bytes = try alloc.dupe(u8, a.bytes),
+                        .media_type = try alloc.dupe(u8, a.media_type),
+                    });
+                }
+
+                return Inbound{
+                    .message = .{
+                        .conv = conv_dup,
+                        .user = user_dup,
+                        .text = text_dup,
+                        .attachments = try att_list.toOwnedSlice(alloc),
+                        .platform_msg_id = platform_msg_id_dup,
+                    },
+                };
+            },
+            .approval_reply => |rep| {
+                const conv_dup = try rep.conv.clone(alloc);
+                errdefer conv_dup.deinit(alloc);
+                const user_dup = try alloc.dupe(u8, rep.user);
+                errdefer alloc.free(user_dup);
+                const request_id_dup = try alloc.dupe(u8, rep.request_id);
+                errdefer alloc.free(request_id_dup);
+
+                return Inbound{
+                    .approval_reply = .{
+                        .conv = conv_dup,
+                        .user = user_dup,
+                        .request_id = request_id_dup,
+                        .decision = rep.decision,
+                    },
+                };
+            },
+        }
+    }
+
+    pub fn deinit(self: Inbound, alloc: std.mem.Allocator) void {
+        switch (self) {
+            .message => |m| {
+                m.conv.deinit(alloc);
+                alloc.free(m.user);
+                alloc.free(m.text);
+                alloc.free(m.platform_msg_id);
+                for (m.attachments) |a| {
+                    alloc.free(a.name);
+                    alloc.free(a.bytes);
+                    alloc.free(a.media_type);
+                }
+                alloc.free(m.attachments);
+            },
+            .approval_reply => |rep| {
+                rep.conv.deinit(alloc);
+                alloc.free(rep.user);
+                alloc.free(rep.request_id);
+            },
+        }
+    }
 };
 
 pub const MessageRef = struct {

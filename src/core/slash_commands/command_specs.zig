@@ -100,20 +100,6 @@ pub const TopLevelSpec = struct {
     hidden_from_top_level_help: bool = false,
 };
 
-pub const bridge_spec = TopLevelSpec{
-    .kind = .bridge,
-    .token = "bridge",
-    .usage = "bridge start|stop|status [--json]|pair <connector>",
-    .summary = "Run or manage the chat bridge daemon",
-    .options = &.{
-        .{ .flag = "start [--connector <name>] [--daemon]", .description = "Start bridge runtime" },
-        .{ .flag = "stop", .description = "Stop bridge daemon" },
-        .{ .flag = "status [--json]", .description = "Show bridge status" },
-        .{ .flag = "pair <connector>", .description = "Generate pairing code" },
-    },
-    .hidden_from_top_level_help = true,
-};
-
 pub const TopLevelHelpEntry = struct {
     kind: ?TopLevelKind = null,
     usage: []const u8,
@@ -1666,17 +1652,7 @@ fn testSlashRegistry() SlashRegistry {
 
 fn testTopLevelRegistry() TopLevelRegistry {
     const builtin_commands = @import("../../builtins/commands.zig");
-    const test_specs = builtin_commands.top_level_specs ++ [_]TopLevelSpec{bridge_spec};
-    return .{
-        .specs = &test_specs,
-        .description = builtin_commands.top_level_registry.description,
-        .interactive_hint = builtin_commands.top_level_registry.interactive_hint,
-        .help_groups = builtin_commands.top_level_registry.help_groups,
-        .flags = builtin_commands.top_level_registry.flags,
-        .examples = builtin_commands.top_level_registry.examples,
-        .notes = builtin_commands.top_level_registry.notes,
-        .resources = builtin_commands.top_level_registry.resources,
-    };
+    return builtin_commands.top_level_registry;
 }
 
 fn testTopLevelHelpText(alloc: Allocator) ![]u8 {

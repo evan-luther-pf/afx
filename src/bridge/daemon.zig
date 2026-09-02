@@ -262,27 +262,11 @@ pub const FakeLineConnector = struct {
         var buf: [4096]u8 = undefined;
         var r = stdin_file.reader(io_mod.getIo(), &buf);
 
-        var line_acc: std.ArrayListUnmanaged(u8) = .empty;
-        defer line_acc.deinit(self.alloc);
-
         while (self.running.load(.seq_cst)) {
-            var chunk: [1024]u8 = undefined;
-            const n = r.interface.readSliceShort(&chunk) catch break;
-            if (n == 0) {
-                io_mod.sleep(10_000_000);
-                continue;
-            }
-
-            for (chunk[0..n]) |byte| {
-                if (byte == '\n') {
-                    const trimmed = std.mem.trim(u8, line_acc.items, " \r\t");
-                    if (trimmed.len > 0) {
-                        self.handleInputLine(trimmed) catch {};
-                    }
-                    line_acc.clearRetainingCapacity();
-                } else {
-                    try line_acc.append(self.alloc, byte);
-                }
+            const line = r.interface.takeDelimiter('\n') catch break orelse break;
+            const trimmed = std.mem.trim(u8, line, " \r\t");
+            if (trimmed.len > 0) {
+                self.handleInputLine(trimmed) catch {};
             }
         }
     }
