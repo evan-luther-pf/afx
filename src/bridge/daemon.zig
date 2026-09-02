@@ -34,6 +34,7 @@ pub const DaemonPaths = struct {
     logs_dir: []const u8,
     log_file: []const u8,
     pairing_file: []const u8,
+    socket_file: []const u8,
 
     pub fn deinit(self: DaemonPaths, alloc: std.mem.Allocator) void {
         alloc.free(self.base_dir);
@@ -44,6 +45,7 @@ pub const DaemonPaths = struct {
         alloc.free(self.logs_dir);
         alloc.free(self.log_file);
         alloc.free(self.pairing_file);
+        alloc.free(self.socket_file);
     }
 };
 fn ensureDir(path: []const u8) !void {
@@ -83,6 +85,11 @@ pub fn resolveDaemonPaths(alloc: std.mem.Allocator) !DaemonPaths {
 
     const pairing_file = try std.fmt.allocPrint(alloc, "{s}/pairing.json", .{base_dir});
     errdefer alloc.free(pairing_file);
+    const socket_file = if (io_mod.getenv("FX_BRIDGE_SOCK")) |override|
+        try alloc.dupe(u8, override)
+    else
+        try std.fmt.allocPrint(alloc, "{s}/bridge.sock", .{base_dir});
+    errdefer alloc.free(socket_file);
 
     // Ensure base directory and logs directory exist
     ensureDir(base_dir) catch {};
@@ -96,6 +103,7 @@ pub fn resolveDaemonPaths(alloc: std.mem.Allocator) !DaemonPaths {
         .logs_dir = logs_dir,
         .log_file = log_file,
         .pairing_file = pairing_file,
+        .socket_file = socket_file,
     };
 }
 
@@ -626,7 +634,8 @@ pub fn handleBridgeCli(
 
         const use_fake = (only_connector != null and std.mem.eql(u8, only_connector.?, "fake")) or
             (fake_script != null) or
-            (io_mod.getenv("FX_BRIDGE_FAKE") != null);
+            (io_mod.getenv("FX_BRIDGE_FAKE") != null) or
+            (bridge_config.home_channel != null and std.mem.eql(u8, bridge_config.home_channel.?.connector, "fake"));
 
         var fake_conn: ?*FakeLineConnector = null;
         defer if (fake_conn) |fc| fc.deinit();

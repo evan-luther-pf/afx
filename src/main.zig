@@ -68,6 +68,8 @@ const host_runtime_profile = @import("core/hosts/runtime_profile.zig");
 const js_host_url_opener = @import("core/hosts/js_host_url_opener.zig");
 const js_host_workspace = @import("core/hosts/js_host_workspace.zig");
 const host_target = @import("core/hosts/target.zig");
+const home_channel_mod = @import("bridge/home_channel.zig");
+const input_approval_runtime = @import("core/app/input_approval_runtime.zig");
 const native_host = @import("core/hosts/native.zig");
 const debug_trace = @import("core/shared/debug_trace.zig");
 const display_width = @import("core/shared/display_width.zig");
@@ -878,6 +880,8 @@ const App = struct {
     lifecycle_view: hooks.RuntimeView = hooks.RuntimeView.empty(),
     notifications: builtin_hooks.notifications.State = .{},
     herdr: builtin_hooks.Client = .{},
+    home_channel_enabled: bool = true,
+    home_channel_client: ?home_channel_mod.HomeChannelClient = null,
 
     session: SessionRuntime = SessionRuntime.init(
         max_history_turns,
@@ -978,6 +982,10 @@ const App = struct {
             app.requested_resume = target;
             launch.requested_resume = null;
         }
+        if (home_channel_mod.resolveSocketPath(alloc)) |sock_path| {
+            defer alloc.free(sock_path);
+            app.home_channel_client = home_channel_mod.HomeChannelClient.init(alloc, sock_path) catch null;
+        } else |_| {}
         errdefer if (app.requested_resume) |*target| target.deinit(alloc);
         keybindings.initGlobalKeymap(alloc, io_mod.getenv("HOME"));
         try BootstrapAppRuntime.bootstrap(
@@ -1169,6 +1177,10 @@ const App = struct {
     fn deinitImpl(self: *App, capture_resume_handoff: bool) ?app_session_runtime.ResumeHandoff {
         // Client.deinit releases the herdr pane (clear agent + label) when enabled.
         self.herdr.deinit();
+        if (self.home_channel_client) |*hc| {
+            hc.deinit();
+            self.home_channel_client = null;
+        }
         self.stopStream();
 
         self.worker.requestShutdown();
@@ -2939,6 +2951,11 @@ const App = struct {
             app_permission_runtime.monotonicMillis(),
         );
 
+        if (self.home_channel_client) |*hc| {
+            if (hc.takePendingDecision()) |decision| {
+                input_approval_runtime.ApprovalRuntime(App).handleHomeChannelDecision(self, decision);
+            }
+        }
         if (comptime !host_target.is_wasm) {
             if (self.file_index.joinThreadIfDone(std.heap.c_allocator)) {
                 self.shell.render_requests.request(.footer);
@@ -4423,4 +4440,5 @@ test {
     _ = @import("bridge/commands.zig");
     _ = @import("bridge/runtime.zig");
     _ = @import("bridge/daemon.zig");
+    _ = @import("bridge/home_channel.zig");
 }

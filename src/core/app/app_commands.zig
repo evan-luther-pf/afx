@@ -3817,6 +3817,7 @@ pub fn settingsCatalogSnapshot(app: anytype) settings_catalog.Snapshot {
     if (comptime @hasField(App, "statusline_cost")) snapshot.statusline_cost = app.statusline_cost;
     if (comptime @hasField(App, "statusline_git")) snapshot.statusline_git = app.statusline_git;
     if (comptime @hasField(App, "prompt_history")) snapshot.prompt_history = app.prompt_history.enabled;
+    if (comptime @hasField(App, "home_channel_enabled")) snapshot.home_channel = app.home_channel_enabled;
     if (comptime @hasDecl(App, "notificationPreferences")) {
         const notifications = app.notificationPreferences();
         snapshot.sound_level = settings_catalog.notificationLevel(
@@ -3940,6 +3941,22 @@ pub fn applySettingsCatalogChange(app: anytype, change: settings_catalog.Change)
                 app,
                 "images",
                 .{ .images = enabled },
+                runtime_changed,
+            );
+        },
+        .home_channel => {
+            const enabled = parseOnOff(change.value) orelse return error.InvalidSettingsCatalogValue;
+            const runtime_changed = if (comptime @hasField(@TypeOf(app.*), "home_channel_enabled"))
+                app.home_channel_enabled != enabled
+            else
+                false;
+            if (runtime_changed) {
+                app.home_channel_enabled = enabled;
+            }
+            try persistUserPreferences(
+                app,
+                "home_channel",
+                .{ .home_channel = enabled },
                 runtime_changed,
             );
         },

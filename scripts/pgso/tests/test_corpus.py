@@ -74,6 +74,7 @@ VERIFICATION_E2E_TESTS = (
     "bridge-slack.test.ts",
     "bridge-telegram.test.ts",
     "bridge-imsg.test.ts",
+    "bridge-home-channel.test.ts",
 )
 
 EXCLUDED_E2E_TESTS = (
@@ -369,7 +370,7 @@ class PgsoCorpusTests(unittest.TestCase):
             tuple(test_file for test_file, _ in corpus.intentional_exclusions),
         )
         self.assertEqual(36, len(corpus.scenarios))
-        self.assertEqual(57, len(corpus.candidate_scenarios))
+        self.assertEqual(58, len(corpus.candidate_scenarios))
         self.assertEqual(
             100,
             next(

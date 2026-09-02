@@ -385,7 +385,7 @@ test "settings menu renders each setting on one row at wide and narrow widths" {
         .snapshot = test_snapshot,
     };
     const wide_rows = menuRowCount(projection, 100, 40);
-    try std.testing.expectEqual(@as(u16, 34), wide_rows);
+    try std.testing.expectEqual(@as(u16, 35), wide_rows);
     var header = try composeSettingsMenuRow(alloc, projection, 0, 100, wide_rows);
     defer header.deinit(alloc);
     try std.testing.expect(std.mem.find(u8, header.items, "Settings") != null);
@@ -409,7 +409,7 @@ test "settings menu renders each setting on one row at wide and narrow widths" {
     try std.testing.expect(std.mem.find(u8, compact_item.items, "on") != null);
 
     const narrow_rows = menuRowCount(projection, 24, 40);
-    try std.testing.expectEqual(@as(u16, 34), narrow_rows);
+    try std.testing.expectEqual(@as(u16, 35), narrow_rows);
     var narrow_item = try composeSettingsMenuRow(alloc, projection, 3, 24, narrow_rows);
     defer narrow_item.deinit(alloc);
     try std.testing.expect(std.mem.find(u8, narrow_item.items, "Status line") != null);

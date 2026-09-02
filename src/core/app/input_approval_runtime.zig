@@ -33,6 +33,7 @@ const interaction_state = @import("../../ui/footer/interaction_state.zig");
 const approval_prompt = @import("../permissions/approval_prompt.zig");
 const render_request = @import("../../ui/render_request.zig");
 const subagent_controller = @import("../../ui/subagent/controller.zig");
+const connector_mod = @import("../../bridge/connector.zig");
 
 const ToolPermissionDecision = types.ToolPermissionDecision;
 
@@ -163,6 +164,11 @@ pub fn ApprovalRuntime(comptime App: type) type {
         }
 
         fn clearApprovalPrompt(app: *App, reason: []const u8) void {
+            if (comptime @hasField(App, "home_channel_client")) {
+                if (app.home_channel_client) |*hc| {
+                    hc.cancelActiveAsk();
+                }
+            }
             app.approval_prompt.clearWithReason(app.alloc, reason);
             app.approval_screen.clear();
         }
@@ -262,6 +268,11 @@ pub fn ApprovalRuntime(comptime App: type) type {
                     requestActiveSurfaceFrame(app);
                 },
                 .stale, .no_pending => {},
+            }
+            if (comptime @hasField(App, "home_channel_client")) {
+                if (app.home_channel_client) |*hc| {
+                    hc.cancelActiveAsk();
+                }
             }
         }
 
@@ -422,7 +433,25 @@ pub fn ApprovalRuntime(comptime App: type) type {
                 app.pacer.clear(app.alloc);
                 app.stopStream();
             }
+            if (comptime @hasField(App, "home_channel_client")) {
+                if (app.home_channel_client) |*hc| {
+                    hc.cancelActiveAsk();
+                }
+            }
             requestActiveSurfaceFrame(app);
+        }
+
+        pub fn handleHomeChannelDecision(app: *App, decision: connector_mod.Decision) void {
+            debug_trace.logf("permission", "handleHomeChannelDecision active={s} decision={s}", .{ if (app.approval_prompt.isActive()) "true" else "false", @tagName(decision) });
+            if (!app.approval_prompt.isActive()) return;
+            const tool_decision: ToolPermissionDecision = switch (decision) {
+                .allow_once => .once,
+                .allow_session => .always,
+                .deny => .deny,
+            };
+            submitPermissionChoice(app, tool_decision) catch |err| {
+                debug_trace.logf("permission", "home_channel decision submit failed: {s}", .{@errorName(err)});
+            };
         }
 
         fn claimApprovalAffirmative(app: *App) bool {

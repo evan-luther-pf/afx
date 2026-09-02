@@ -281,6 +281,26 @@ Add an `imsg` connector block under `connectors` in `~/.afx/bridge.json`:
 - **Existing chats only**: AFX replies within existing chat threads (`to chat id <guid>`). Initiating new conversations to arbitrary handles without an established chat is out of scope.
 - **Typedstream text extraction**: extracting text from rich `attributedBody` blobs uses a best-effort typedstream heuristic for NSString payloads; messages with complex attachments may not decode text if the raw `text` field is null.
 - **No rich controls**: iMessage does not support interactive buttons or message edits. Tool approval requests send numbered text prompts (reply `1` to allow once, `2` to allow for session, `3` to deny).
+### Home channel
+
+When `bridge.home_channel` is configured, your interactive TUI session mirrors permission prompts and turn-complete notices to your chosen chat channel:
+
+```json
+{
+  "bridge": {
+    "home_channel": {
+      "connector": "slack",
+      "chat_id": "C12345678"
+    }
+  }
+}
+```
+
+- Permission prompts in the interactive terminal are dispatched to chat as interactive buttons or reply prompts. Answering in chat approves or denies the terminal action immediately.
+- If you answer locally in the terminal, the chat prompt is updated to show it was answered in the terminal.
+- Turn-complete notifications include a one-line summary with the workspace name and assistant response snippet.
+- Home channel mirroring can be toggled without editing JSON via `/settings` (`Home channel: on|off`).
+
 ## Updates
 
 afx checks [GitHub Releases](https://github.com/evan-luther-pf/afx/releases) for new versions. When an update is ready, press `Ctrl+G` to reload into it.

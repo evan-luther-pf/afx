@@ -6,6 +6,9 @@ const notification_sound = @import("../../core/notifications/sound.zig");
 const debug_trace = @import("../../core/shared/debug_trace.zig");
 const app_session_runtime = @import("../../core/app/app_session_runtime.zig");
 const ui_render = @import("../../ui/render.zig");
+const builtin = @import("builtin");
+const connector_mod = @import("../../bridge/connector.zig");
+const input_approval_runtime = @import("../../core/app/input_approval_runtime.zig");
 
 const Preferences = notification_contract.Preferences;
 const Kind = notification_contract.Kind;
@@ -233,6 +236,35 @@ fn Runtime(comptime App: type) type {
             input: hooks.PostTurnEndInput,
         ) hooks.HandlerError!void {
             const app: *App = @ptrCast(@alignCast(raw));
+            if (comptime @hasField(App, "home_channel_enabled") and @hasField(App, "home_channel_client")) {
+                if (app.home_channel_enabled and input.invocation.scope.kind == .interactive) {
+                    if (app.home_channel_client) |*hc| {
+                        const ws_name = if (app.workspace_root.len > 0) std.fs.path.basename(app.workspace_root) else "workspace";
+                        const last_reply = input.assistant_text orelse if (comptime @hasField(App, "session")) app.session.lastAssistantReply() else null;
+                        var summary_buf: [300]u8 = undefined;
+                        var summary: []const u8 = "";
+                        if (last_reply) |reply| {
+                            const trimmed = std.mem.trim(u8, reply, " \r\n\t");
+                            if (trimmed.len > 0) {
+                                var first_200: [200]u8 = undefined;
+                                const take_len = @min(trimmed.len, 200);
+                                for (trimmed[0..take_len], 0..) |c, idx| {
+                                    first_200[idx] = if (c == '\n' or c == '\r' or c == '\t') ' ' else c;
+                                }
+                                summary = std.fmt.bufPrint(&summary_buf, "afx: turn complete in {s}: {s}", .{ ws_name, first_200[0..take_len] }) catch "";
+                            } else {
+                                summary = std.fmt.bufPrint(&summary_buf, "afx: turn complete in {s}", .{ws_name}) catch "";
+                            }
+                        } else {
+                            summary = std.fmt.bufPrint(&summary_buf, "afx: turn complete in {s}", .{ws_name}) catch "";
+                        }
+                        if (summary.len > 0) {
+                            hc.notify(summary) catch {};
+                        }
+                    }
+                }
+            }
+
             if (!app.notifications.enabledForScope(
                 .turn_end,
                 input.invocation.scope.kind,
@@ -251,13 +283,40 @@ fn Runtime(comptime App: type) type {
             input: hooks.AttentionRequiredInput,
         ) hooks.HandlerError!void {
             const app: *App = @ptrCast(@alignCast(raw));
+            if (comptime @hasField(App, "home_channel_enabled") and @hasField(App, "home_channel_client")) {
+                if (app.home_channel_enabled and input.kind == .permission) {
+                    if (app.home_channel_client) |*hc| {
+                        if (app.approval_prompt.request) |req| {
+                            const pid: i32 = if (comptime builtin.os.tag != .windows) std.c.getpid() else 1;
+                            const namespaced_id = std.fmt.allocPrint(app.alloc, "tui:{d}:{d}", .{ pid, req.id }) catch null;
+                            if (namespaced_id) |nid| {
+                                defer app.alloc.free(nid);
+                                const title = req.label;
+                                const body = if (req.command) |cmd|
+                                    cmd
+                                else if (req.file) |f|
+                                    f.preview.path
+                                else if (req.explanation) |exp|
+                                    exp
+                                else if (req.tool_arguments_preview) |tap|
+                                    tap
+                                else
+                                    req.label;
+                                const session_id = app_session_runtime.Runtime(App).activeSessionId(app) orelse "";
+
+                                hc.ask(nid, title, body, session_id) catch {};
+                            }
+                        }
+                    }
+                }
+            }
+
             if (!app.notifications.enabledForScope(
                 .attention_required,
                 input.invocation.scope.kind,
             )) return;
             enqueue(app, .{ .kind = .attention_required });
         }
-
         fn enqueue(app: *App, notification: Notification) void {
             app.worker.pushEvent(std.heap.c_allocator, .{ .notification = notification }) catch |err| {
                 debug_trace.logf(

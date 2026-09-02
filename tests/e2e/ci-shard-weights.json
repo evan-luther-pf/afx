@@ -3,6 +3,7 @@
   { "file": "acp.test.ts", "weight": 29 },
   { "file": "ask-presentation.test.ts", "weight": 5 },
   { "file": "auth-refresh.test.ts", "weight": 2 },
+  { "file": "bridge-home-channel.test.ts", "weight": 5 },
   { "file": "bridge-imsg.test.ts", "weight": 5 },
   { "file": "bridge-slack.test.ts", "weight": 5 },
   { "file": "bridge-telegram.test.ts", "weight": 5 },

@@ -89,6 +89,7 @@ pub const Settings = struct {
     visual_tool_blocks: ?bool = null,
     fullscreen_display: ?bool = null,
     images: ?bool = null,
+    home_channel: ?bool = null,
     prompt_history_enabled: ?bool = null,
     effort: ?types.ReasoningEffort = null,
     statusline_context: ?bool = null,
@@ -154,6 +155,7 @@ pub const ConfigSources = struct {
     visual_tool_blocks: ConfigSource = .compiled_default,
     fullscreen_display: ConfigSource = .compiled_default,
     images: ConfigSource = .compiled_default,
+    home_channel: ConfigSource = .compiled_default,
     prompt_history_enabled: ConfigSource = .compiled_default,
     statusline_context: ConfigSource = .compiled_default,
     statusline_session: ConfigSource = .compiled_default,
@@ -612,6 +614,7 @@ fn isProfileOnlySettingKey(key: []const u8) bool {
         "permission_mode",
         "credential_source",
         "yolo_acknowledged",
+        "home_channel",
         "permission",
         "additional_directories",
     }) |profile_key| {
@@ -650,6 +653,7 @@ fn updateConfigSources(sources: *ConfigSources, settings: Settings, source: Conf
     if (settings.startup_scrollback != null) sources.startup_scrollback = source;
     if (settings.visual_tool_blocks != null) sources.visual_tool_blocks = source;
     if (settings.fullscreen_display != null) sources.fullscreen_display = source;
+    if (settings.home_channel != null) sources.home_channel = source;
     if (settings.prompt_history_enabled != null) sources.prompt_history_enabled = source;
     if (settings.statusline_context != null) sources.statusline_context = source;
     if (settings.statusline_session != null) sources.statusline_session = source;
@@ -1440,6 +1444,11 @@ fn parseProfileOnlyFields(
         if (value != .bool) return error.InvalidImagesType;
         settings.images = value.bool;
     }
+    if (root.object.get("home_channel")) |home_channel_value| {
+        const value = home_channel_value;
+        if (value != .bool) return error.InvalidHomeChannelType;
+        settings.home_channel = value.bool;
+    }
     if (root.object.get("prompt_history")) |prompt_history_value| {
         if (prompt_history_value != .object) return error.InvalidPromptHistoryType;
         if (prompt_history_value.object.get("enabled")) |enabled| {
@@ -1558,6 +1567,7 @@ fn mergeSettings(target: *Settings, incoming: *Settings, alloc: Allocator) void 
     if (incoming.visual_tool_blocks) |value| target.visual_tool_blocks = value;
     if (incoming.fullscreen_display) |value| target.fullscreen_display = value;
     if (incoming.images) |value| target.images = value;
+    if (incoming.home_channel) |value| target.home_channel = value;
     if (incoming.prompt_history_enabled) |value| target.prompt_history_enabled = value;
     if (incoming.statusline_context) |value| target.statusline_context = value;
     if (incoming.statusline_session) |value| target.statusline_session = value;

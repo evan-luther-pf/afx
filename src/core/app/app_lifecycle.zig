@@ -138,6 +138,7 @@ pub const StartupState = struct {
     startup_scrollback: bool = true,
     visual_tool_blocks: bool = true,
     fullscreen_display: bool = false,
+    home_channel_enabled: bool = true,
     images_enabled: bool = true,
     prompt_history_enabled: bool = true,
     prompt_history_store_allowed: bool = true,
@@ -437,6 +438,7 @@ fn loadStartupStateFromOwnedWorkspace(
     state.visual_tool_blocks = settings.visual_tool_blocks orelse true;
     state.fullscreen_display = settings.fullscreen_display orelse false;
     state.images_enabled = settings.images orelse true;
+    state.home_channel_enabled = settings.home_channel orelse true;
     state.effort = settings.effort orelse .auto;
     state.first_call_tool_choice = settings.first_call_tool_choice orelse .auto;
     state.statusline_context = settings.statusline_context orelse false;
