@@ -4196,6 +4196,7 @@ test {
     _ = @import("core/config/model_provider.zig");
     _ = provider_runtime;
     _ = @import("acp/prompt.zig");
+    _ = @import("core/session_host/host.zig");
     _ = @import("core/output/activity_status.zig");
     _ = @import("core/agent/agent_runtime.zig");
     _ = @import("core/agent/execution_memory.zig");
@@ -4406,4 +4407,11 @@ test {
     _ = @import("core/agent/worker_runtime.zig");
     _ = @import("gateway/client.zig");
     _ = @import("gateway/host_stream_provider.zig");
+    _ = @import("bridge/connector.zig");
+    _ = @import("bridge/store.zig");
+    _ = @import("bridge/chunker.zig");
+    _ = @import("bridge/markup.zig");
+    _ = @import("bridge/config.zig");
+    _ = @import("bridge/approvals.zig");
+    _ = @import("bridge/connectors/fake.zig");
 }
