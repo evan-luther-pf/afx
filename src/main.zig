@@ -69,6 +69,7 @@ const js_host_url_opener = @import("core/hosts/js_host_url_opener.zig");
 const js_host_workspace = @import("core/hosts/js_host_workspace.zig");
 const host_target = @import("core/hosts/target.zig");
 const home_channel_mod = @import("bridge/home_channel.zig");
+const input_approval_runtime = @import("core/app/input_approval_runtime.zig");
 const native_host = @import("core/hosts/native.zig");
 const debug_trace = @import("core/shared/debug_trace.zig");
 const display_width = @import("core/shared/display_width.zig");
@@ -2950,6 +2951,11 @@ const App = struct {
             app_permission_runtime.monotonicMillis(),
         );
 
+        if (self.home_channel_client) |*hc| {
+            if (hc.takePendingDecision()) |decision| {
+                input_approval_runtime.ApprovalRuntime(App).handleHomeChannelDecision(self, decision);
+            }
+        }
         if (comptime !host_target.is_wasm) {
             if (self.file_index.joinThreadIfDone(std.heap.c_allocator)) {
                 self.shell.render_requests.request(.footer);

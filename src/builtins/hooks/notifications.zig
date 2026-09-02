@@ -304,14 +304,7 @@ fn Runtime(comptime App: type) type {
                                     req.label;
                                 const session_id = app_session_runtime.Runtime(App).activeSessionId(app) orelse "";
 
-                                const DecisionBridge = struct {
-                                    fn onDecision(ctx_ptr: ?*anyopaque, decision: connector_mod.Decision) void {
-                                        const target_app: *App = @ptrCast(@alignCast(ctx_ptr.?));
-                                        input_approval_runtime.ApprovalRuntime(App).handleHomeChannelDecision(target_app, decision);
-                                    }
-                                };
-
-                                hc.ask(nid, title, body, session_id, DecisionBridge.onDecision, app) catch {};
+                                hc.ask(nid, title, body, session_id) catch {};
                             }
                         }
                     }

@@ -293,6 +293,7 @@ pub const HomeChannelServer = struct {
                     self.alloc.free(ref.platform_msg_id);
                 } else |_| {}
             }
+            return;
         }
 
         if (std.mem.eql(u8, op, "ask")) {
@@ -378,7 +379,6 @@ pub const HomeChannelServer = struct {
                     ask.request_id,
                     dec_str,
                 }) catch return false;
-                debug_trace.logf("home_channel", "server sending decision to client req={s} dec={s}", .{ ask.request_id, dec_str });
 
                 writeAllFd(ask.client_fd, msg) catch {};
 
@@ -391,13 +391,12 @@ pub const HomeChannelServer = struct {
     }
 };
 
-pub const DecisionCallback = *const fn (ctx: ?*anyopaque, decision: Decision) void;
-
 pub const HomeChannelClient = struct {
     alloc: std.mem.Allocator,
     socket_path: []const u8,
     active_ask_fd: ?std.c.fd_t = null,
     active_ask_id: ?[]u8 = null,
+    pending_decision: ?Decision = null,
     mutex: std.Io.Mutex = .init,
 
     pub fn init(alloc: std.mem.Allocator, socket_path: []const u8) !HomeChannelClient {
@@ -410,6 +409,14 @@ pub const HomeChannelClient = struct {
     pub fn deinit(self: *HomeChannelClient) void {
         self.cancelActiveAsk();
         self.alloc.free(self.socket_path);
+    }
+
+    pub fn takePendingDecision(self: *HomeChannelClient) ?Decision {
+        self.mutex.lockUncancelable(io_mod.getIo());
+        defer self.mutex.unlock(io_mod.getIo());
+        const dec = self.pending_decision;
+        self.pending_decision = null;
+        return dec;
     }
 
     fn connectSocket(self: *HomeChannelClient) !std.c.fd_t {
@@ -455,8 +462,6 @@ pub const HomeChannelClient = struct {
         title: []const u8,
         body: []const u8,
         session_id: []const u8,
-        cb: DecisionCallback,
-        cb_ctx: ?*anyopaque,
     ) !void {
         self.cancelActiveAsk();
 
@@ -492,39 +497,32 @@ pub const HomeChannelClient = struct {
         }
 
         self.mutex.lockUncancelable(io_mod.getIo());
-        defer self.mutex.unlock(io_mod.getIo());
-
         self.active_ask_fd = fd;
         self.active_ask_id = try self.alloc.dupe(u8, request_id);
+        self.mutex.unlock(io_mod.getIo());
 
         const ReaderContext = struct {
             client: *HomeChannelClient,
             fd: std.c.fd_t,
-            cb: DecisionCallback,
-            cb_ctx: ?*anyopaque,
         };
         const ctx_ptr = try self.alloc.create(ReaderContext);
         ctx_ptr.* = .{
             .client = self,
             .fd = fd,
-            .cb = cb,
-            .cb_ctx = cb_ctx,
         };
+
         const th = try std.Thread.spawn(.{}, readerThreadEntry, .{ctx_ptr});
         th.detach();
     }
+
     fn readerThreadEntry(ctx_ptr: *anyopaque) void {
         const ReaderContext = struct {
             client: *HomeChannelClient,
             fd: std.c.fd_t,
-            cb: DecisionCallback,
-            cb_ctx: ?*anyopaque,
         };
         const ctx: *ReaderContext = @ptrCast(@alignCast(ctx_ptr));
         const alloc = ctx.client.alloc;
         const fd = ctx.fd;
-        const cb = ctx.cb;
-        const cb_ctx = ctx.cb_ctx;
         defer alloc.destroy(ctx);
 
         var buf: [512]u8 = undefined;
@@ -554,10 +552,10 @@ pub const HomeChannelClient = struct {
                                     .allow_session
                                 else
                                     .allow_once;
-                                debug_trace.logf("home_channel", "client read decision req={s} dec={s}", .{ line, dec_str });
 
                                 const client = ctx.client;
                                 client.mutex.lockUncancelable(io_mod.getIo());
+                                client.pending_decision = decision;
                                 if (client.active_ask_fd) |active_fd| {
                                     if (active_fd == fd) {
                                         client.active_ask_fd = null;
@@ -569,8 +567,6 @@ pub const HomeChannelClient = struct {
                                 }
                                 client.mutex.unlock(io_mod.getIo());
                                 _ = std.c.close(fd);
-
-                                cb(cb_ctx, decision);
                                 break;
                             }
                         }
@@ -662,23 +658,11 @@ test "home_channel: server notify and ask/decision loopback" {
     try std.testing.expectEqualStrings("hello from tui", fake.sent_messages.items[0].text);
 
     // 2. Ask -> Decision
-    const DecisionCapture = struct {
-        received_decision: ?Decision = null,
-
-        fn onDecision(ctx_ptr: ?*anyopaque, d: Decision) void {
-            const self: *@This() = @ptrCast(@alignCast(ctx_ptr.?));
-            self.received_decision = d;
-        }
-    };
-    var capture = DecisionCapture{};
-
     try client.ask(
         "tui:100:1",
         "Run bash",
         "echo test",
         "sess_1",
-        DecisionCapture.onDecision,
-        &capture,
     );
     io_mod.sleep(50_000_000);
 
@@ -691,7 +675,8 @@ test "home_channel: server notify and ask/decision loopback" {
     try std.testing.expect(handled);
 
     io_mod.sleep(50_000_000);
-    try std.testing.expectEqual(Decision.deny, capture.received_decision.?);
+    const decision = client.takePendingDecision() orelse return error.TestExpectedNonNull;
+    try std.testing.expectEqual(Decision.deny, decision);
 }
 
 test "home_channel: cancel_ask edits message" {
@@ -728,17 +713,11 @@ test "home_channel: cancel_ask edits message" {
     var client = try HomeChannelClient.init(alloc, sock_path);
     defer client.deinit();
 
-    const DummyCapture = struct {
-        fn onDecision(_: ?*anyopaque, _: Decision) void {}
-    };
-
     try client.ask(
         "tui:200:2",
         "Edit file",
         "foo.zig",
         "sess_2",
-        DummyCapture.onDecision,
-        null,
     );
     io_mod.sleep(50_000_000);
 
