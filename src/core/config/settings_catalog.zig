@@ -50,6 +50,7 @@ pub const SettingId = enum {
     startup_scrollback,
     prompt_history,
     images,
+    home_channel,
 };
 pub const Spec = struct {
     id: SettingId,
@@ -78,6 +79,7 @@ pub const Snapshot = struct {
     prompt_history: bool = true,
     images: bool = true,
     sound_level: []const u8 = "on",
+    home_channel: bool = true,
     agent_profiles: []const u8 = "/agents",
     agent_model: []const u8 = "inherit",
     agent_effort: []const u8 = "inherit",
@@ -110,6 +112,7 @@ pub const Snapshot = struct {
             .prompt_history => onOff(self.prompt_history),
             .images => onOff(self.images),
             .sound_level => self.sound_level,
+            .home_channel => onOff(self.home_channel),
             .slash_menu_categories => onOff(self.slash_menu_categories),
             .tool_display => if (self.visual_tool_blocks) "visual" else "compact",
             .theme => self.theme,
@@ -323,6 +326,7 @@ const specs = [_]Spec{
     .{ .id = .spawn_depth, .category = .agents, .label = "Spawn depth", .description = "AFX_MAX_SPAWN_DEPTH; -1 means unlimited" },
     .{ .id = .hub_wait, .category = .agents, .label = "Hub wait default", .description = "Default wait timeout; each hub call may override it" },
     .{ .id = .sound_level, .category = .notifications, .label = "Sound level", .description = "Choose off, on, or max sounds and desktop notifications" },
+    .{ .id = .home_channel, .category = .notifications, .label = "Home channel", .description = "Mirror permissions and turn notices to bridge home channel" },
     .{ .id = .startup_scrollback, .category = .advanced, .label = "Startup scrollback", .description = "Restore terminal output when afx starts" },
     .{ .id = .prompt_history, .category = .advanced, .label = "Prompt history", .description = "Save accepted prompts and slash commands for composer history" },
 };
@@ -440,6 +444,7 @@ fn staticOptionsFor(id: SettingId) []const []const u8 {
         .startup_scrollback,
         .prompt_history,
         .images,
+        .home_channel,
         => &on_off_options,
         .theme => &theme_options,
         .tool_display => &tool_display_options,
@@ -499,11 +504,11 @@ test "settings catalog projects grouped searchable preferences" {
         .sound_level = "on",
     };
 
-    try std.testing.expectEqual(@as(usize, 23), filteredCount(snapshot, .all, ""));
+    try std.testing.expectEqual(@as(usize, 24), filteredCount(snapshot, .all, ""));
     try std.testing.expectEqual(@as(usize, 8), filteredCount(snapshot, .interface, ""));
     try std.testing.expectEqual(@as(usize, 4), filteredCount(snapshot, .agent, ""));
     try std.testing.expectEqual(@as(usize, 8), filteredCount(snapshot, .agents, ""));
-    try std.testing.expectEqual(@as(usize, 1), filteredCount(snapshot, .notifications, ""));
+    try std.testing.expectEqual(@as(usize, 2), filteredCount(snapshot, .notifications, ""));
     try std.testing.expectEqual(@as(usize, 2), filteredCount(snapshot, .advanced, ""));
     const tool_display = itemAt(snapshot, .interface, "tool display", 0).?;
     try std.testing.expectEqual(SettingId.tool_display, tool_display.id);

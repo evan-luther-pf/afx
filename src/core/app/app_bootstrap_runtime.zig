@@ -303,6 +303,9 @@ pub fn Runtime(comptime App: type) type {
             if (comptime @hasField(@TypeOf(app.shell), "images_enabled")) {
                 app.shell.images_enabled = startup.images_enabled;
             }
+            if (comptime @hasField(App, "home_channel_enabled")) {
+                app.home_channel_enabled = startup.home_channel_enabled;
+            }
             app.permission_state.yolo_acknowledged = startup.yolo_acknowledged;
             app_permission_runtime.Runtime(App).initializeYoloWarning(app);
             app.statusline_context = startup.statusline_context;

@@ -187,8 +187,8 @@ pub const PostTurnEndInput = struct {
     invocation: Invocation,
     outcome: types.TurnPresentationOutcome,
     provider_disposition: ?types.ProviderCompletionDisposition = null,
+    assistant_text: ?[]const u8 = null,
 };
-
 pub const PostTurnEndHandler = struct {
     name: []const u8,
     ctx: *anyopaque,

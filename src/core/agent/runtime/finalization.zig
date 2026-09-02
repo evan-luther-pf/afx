@@ -39,6 +39,7 @@ pub const TurnFinalizationGuard = struct {
     turn_id: u64,
     lifecycle: LifecycleContext,
     state: State = .open,
+    assistant_text: ?[]const u8 = null,
 
     pub fn init(
         deps: *const AgentRuntimeDeps,
@@ -84,6 +85,7 @@ pub const TurnFinalizationGuard = struct {
             .turn_id = self.turn_id,
             .outcome = outcome,
             .provider_disposition = disposition,
+            .assistant_text = self.assistant_text,
         });
 
         if (finished_prompt) |finished| {
@@ -106,6 +108,7 @@ pub fn finishAssistantTerminalWithExecution(
     finish_trace: *PromptFinishTrace,
     trace_outcome: []const u8,
 ) !void {
+    finalization.assistant_text = assistant_text;
     const turn: HistoryTurn = .{ .assistant = .{
         .user = .{ .text = job.prompt, .images = job.images },
         .assistant = @constCast(assistant_text),

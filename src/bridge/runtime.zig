@@ -22,6 +22,7 @@ const imsg_mod = @import("connectors/imsg.zig");
 const approvals_mod = @import("approvals.zig");
 const Approvals = approvals_mod.Approvals;
 const commands_mod = @import("commands.zig");
+const home_channel_mod = @import("home_channel.zig");
 const host_mod = @import("../core/session_host/host.zig");
 const Host = host_mod.Host;
 const host_types = host_mod.types;
@@ -134,6 +135,7 @@ pub const Runtime = struct {
     approvals: Approvals,
     rate_limiter: RateLimiter,
     event_sink: EventSink = .{ .ctx = undefined, .push = pushInbound },
+    home_channel_server: ?*home_channel_mod.HomeChannelServer = null,
 
     active_pairing: ?PairingCode = null,
     pairing_mutex: std.Io.Mutex = .init,
@@ -178,11 +180,25 @@ pub const Runtime = struct {
             .event_sink = .{ .ctx = @ptrCast(self), .push = pushInbound },
         };
         self.router.store = &self.store;
+        if (config.home_channel) |hc| {
+            const sock_path = try home_channel_mod.resolveSocketPath(alloc);
+            defer alloc.free(sock_path);
+            self.home_channel_server = try home_channel_mod.HomeChannelServer.init(
+                alloc,
+                sock_path,
+                hc,
+                conns_dup,
+            );
+        }
         return self;
     }
 
     pub fn deinit(self: *Runtime) void {
         self.stop();
+        if (self.home_channel_server) |hcs| {
+            hcs.deinit();
+            self.home_channel_server = null;
+        }
         self.alloc.free(self.connectors);
 
         self.status_mutex.lockUncancelable(io_mod.getIo());
@@ -501,6 +517,9 @@ pub const Runtime = struct {
 
         // 3. Spawn expiry thread
         self.expiry_thread = try std.Thread.spawn(.{}, expiryThreadEntry, .{self});
+        if (self.home_channel_server) |hcs| {
+            try hcs.start();
+        }
     }
 
     pub fn stop(self: *Runtime) void {
@@ -512,6 +531,9 @@ pub const Runtime = struct {
             conn.stop(conn.ctx);
         }
 
+        if (self.home_channel_server) |hcs| {
+            hcs.stop();
+        }
         // Wake queue workers
         self.queue_mutex.lockUncancelable(io_mod.getIo());
         self.queue_cond.broadcast(io_mod.getIo());
@@ -608,6 +630,11 @@ pub const Runtime = struct {
     fn processInboundEvent(self: *Runtime, event: Inbound) !void {
         switch (event) {
             .approval_reply => |rep| {
+                if (self.home_channel_server) |hcs| {
+                    if (hcs.handleApprovalReply(rep.request_id, rep.decision)) {
+                        return;
+                    }
+                }
                 const conn = self.findConnector(rep.conv.connector) orelse return;
                 const conv_obj = try self.router.getOrCreate(rep.conv);
 

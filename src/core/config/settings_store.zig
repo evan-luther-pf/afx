@@ -109,6 +109,7 @@ pub const UserSettingsPatch = struct {
     visual_tool_blocks: ?bool = null,
     fullscreen_display: ?bool = null,
     images: ?bool = null,
+    home_channel: ?bool = null,
     prompt_history_enabled: ?bool = null,
     statusline_item: ?StatuslineItemPatch = null,
     notification_turn_end: ?bool = null,
@@ -131,6 +132,7 @@ pub const UserSettingsPatch = struct {
             self.visual_tool_blocks == null and
             self.fullscreen_display == null and
             self.images == null and
+            self.home_channel == null and
             self.prompt_history_enabled == null and
             self.statusline_item == null and
             self.notification_turn_end == null and
@@ -1039,6 +1041,7 @@ fn applyUserPatchToRoot(
     if (patch.visual_tool_blocks) |value| application.changed = try putBool(arena, &root.object, "visual_tool_blocks", value) or application.changed;
     if (patch.fullscreen_display) |value| application.changed = try putBool(arena, &root.object, "fullscreen_display", value) or application.changed;
     if (patch.images) |value| application.changed = try putBool(arena, &root.object, "images", value) or application.changed;
+    if (patch.home_channel) |value| application.changed = try putBool(arena, &root.object, "home_channel", value) or application.changed;
 
     if (patch.prompt_history_enabled) |enabled| {
         var prompt_history = if (root.object.getPtr("prompt_history")) |value| blk: {
@@ -1745,7 +1748,7 @@ fn validateKnownSettingsObject(
     if (object.get("context_limits")) |value| {
         _ = context_limits.parseJsonObject(value) catch return error.InvalidSettingsFormat;
     }
-    inline for (&.{ "context", "fast_mode", "auto_upgrade", "slash_menu_categories", "startup_scrollback", "visual_tool_blocks", "fullscreen_display", "images", "yolo_acknowledged" }) |key| {
+    inline for (&.{ "context", "fast_mode", "auto_upgrade", "slash_menu_categories", "startup_scrollback", "visual_tool_blocks", "fullscreen_display", "images", "home_channel", "yolo_acknowledged" }) |key| {
         if (object.get(key)) |value| {
             if (value != .bool) return error.InvalidSettingsFormat;
         }
