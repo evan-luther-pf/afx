@@ -5869,9 +5869,8 @@ pub const TranscriptRuntime = struct {
         const line = formatTurnSummaryLine(&line_buf, summary);
         const entry = try std.fmt.allocPrint(alloc, "{s}{s}{s}\n", .{ ui_render.dim_style, line, ui_render.reset_style });
         defer alloc.free(entry);
-        const entry_id = try transcript_store.appendRawTranscriptEntryClassified(self, alloc, entry, .turn_summary);
         if (self.worker_status.clear_recovered_route()) self.render_requests.request(.footer);
-        return entry_id;
+        return transcript_store.appendRawTranscriptEntryClassified(self, alloc, entry, .turn_summary);
     }
 
     /// Swap the bytes of the `raw_bytes` entry with `entry_id` to a dup of

@@ -101,26 +101,16 @@ pub fn hexToBytesAlloc(alloc: Allocator, hex_str: []const u8) ![]u8 {
     return out;
 }
 
-/// Executes a read-only sqlite query via `/usr/bin/sqlite3 -json -readonly`.
+/// Executes a read-only sqlite query via the `sqlite3` available on PATH.
 pub fn runSqliteQuery(alloc: Allocator, io: std.Io, db_path: []const u8, query: []const u8) ![]u8 {
     const argv = &[_][]const u8{
-        "/usr/bin/sqlite3",
+        "sqlite3",
         "-json",
         "-readonly",
         db_path,
         query,
     };
-    const run_res = std.process.run(alloc, io, .{ .argv = argv }) catch blk: {
-        // Fallback to sqlite3 on PATH if /usr/bin/sqlite3 is not available
-        const fallback_argv = &[_][]const u8{
-            "sqlite3",
-            "-json",
-            "-readonly",
-            db_path,
-            query,
-        };
-        break :blk try std.process.run(alloc, io, .{ .argv = fallback_argv });
-    };
+    const run_res = try std.process.run(alloc, io, .{ .argv = argv });
     defer alloc.free(run_res.stderr);
     if (run_res.term != .exited or run_res.term.exited != 0) {
         alloc.free(run_res.stdout);
@@ -206,9 +196,14 @@ pub const ImsgConnector = struct {
 
     fn startWrapper(ctx: *anyopaque, sink: *EventSink) anyerror!void {
         const self: *ImsgConnector = @ptrCast(@alignCast(ctx));
+        const db_path = try resolveDbPath(self.alloc, self.config.db_path);
+        errdefer self.alloc.free(db_path);
+        const cursor_rowid = try self.loadInitialCursor(db_path);
+
         self.sink = sink;
         self.is_running.store(true, .seq_cst);
-        self.worker_thread = try std.Thread.spawn(.{}, workerThreadEntry, .{self});
+        errdefer self.is_running.store(false, .seq_cst);
+        self.worker_thread = try std.Thread.spawn(.{}, workerThreadEntry, .{ self, db_path, cursor_rowid });
     }
 
     fn stopWrapper(ctx: *anyopaque) void {
@@ -337,12 +332,10 @@ pub const ImsgConnector = struct {
         return max_rowid;
     }
 
-    fn workerThreadEntry(self: *ImsgConnector) void {
-        const db_path = resolveDbPath(self.alloc, self.config.db_path) catch return;
+    fn workerThreadEntry(self: *ImsgConnector, db_path: []u8, initial_cursor: u64) void {
         defer self.alloc.free(db_path);
 
-        var cursor_rowid = self.loadInitialCursor(db_path) catch 0;
-
+        var cursor_rowid = initial_cursor;
         while (self.is_running.load(.seq_cst)) {
             self.pollOnce(db_path, &cursor_rowid) catch {};
             io_mod.sleep(@as(u64, self.config.poll_interval_ms) * 1_000_000);

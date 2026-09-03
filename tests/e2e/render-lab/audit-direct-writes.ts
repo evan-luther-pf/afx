@@ -60,6 +60,7 @@ const allowlist: AllowRule[] = [
   rule("src/core/execution/command_runner.zig", "(?:runForegroundSessionBootstrap|writeForegroundSessionReplaceFailure)", /stdio_acquisition_write/, "subprocess_protocol_transport", "foreground command bootstrap protocol"),
   rule("src/core/terminal/native_session.zig", "(?:acceptMarker|runLauncher)", /fixed_descriptor/, "subprocess_protocol_transport", "private native launcher PTY and control descriptors"),
   rule("src/core/terminal/tmux_session.zig", "runLauncher", /fixed_descriptor/, "subprocess_protocol_transport", "private tmux launcher PTY descriptor"),
+  rule("src/bridge/daemon.zig", "(?:sendWrapper|editWrapper|askWrapper)", /stdio_acquisition/, "subprocess_protocol_transport", "fake line connector protocol output"),
   rule("src/core/terminal/client.zig", "(?:runFixture|writeFixtureJson)", /stdio_acquisition_write/, "tests", "private terminal client fixture output"),
   rule("src/terminal_client_fixture.zig", "(?:writeCompletionJson|writeJson)", /stdio_acquisition_write/, "tests", "private test-fixture output"),
   rule("src/core/shared/darwin_process_spawn.zig", "process_spawn", /fixed_descriptor/, "subprocess_protocol_transport", "child stdio file-action mapping"),
