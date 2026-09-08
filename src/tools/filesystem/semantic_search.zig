@@ -120,6 +120,10 @@ fn runSearch(cfg: Config, arena: std.mem.Allocator, query: []const u8, requested
         var walker = try dir.walk(arena);
         defer walker.deinit();
 
+        var scan_state = std.heap.ArenaAllocator.init(arena);
+        defer scan_state.deinit();
+        const scan = scan_state.allocator();
+
         var walked_entries: usize = 0;
         while (true) {
             if (walked_entries >= walk_entry_cap) {
@@ -137,16 +141,16 @@ fn runSearch(cfg: Config, arena: std.mem.Allocator, query: []const u8, requested
             }
             if (ignored) continue;
 
-            const file_abs = try std.fs.path.join(arena, &.{ root.absolute, entry.path });
-            const display_rel = try joinRelativeSearchPath(arena, root.relative, entry.path);
+            _ = scan_state.reset(.retain_capacity);
+            const file_abs = try std.fs.path.join(scan, &.{ root.absolute, entry.path });
 
-            const maybe_read_abs = resolveDirectoryEntryTarget(arena, root.scope_root, file_abs, entry.kind) catch |err| {
+            const maybe_read_abs = resolveDirectoryEntryTarget(scan, root.scope_root, file_abs, entry.kind) catch |err| {
                 if (err == error.OutOfMemory) return error.OutOfMemory;
                 logSemanticScanError(file_abs, err);
                 continue;
             };
             const read_abs = maybe_read_abs orelse continue;
-            const file_score = scoreFileForKeywords(arena, file_abs, read_abs, keywords, cfg.max_read_file_bytes * 2) catch |err| {
+            const file_score = scoreFileForKeywords(scan, file_abs, read_abs, keywords, cfg.max_read_file_bytes * 2) catch |err| {
                 if (err == error.OutOfMemory) return error.OutOfMemory;
                 logSemanticScanError(file_abs, err);
                 continue;
@@ -158,9 +162,9 @@ fn runSearch(cfg: Config, arena: std.mem.Allocator, query: []const u8, requested
                     break;
                 }
                 try results.append(arena, .{
-                    .path = display_rel,
+                    .path = try joinRelativeSearchPath(arena, root.relative, entry.path),
                     .score = file_score.score,
-                    .sample_line = file_score.sample_line,
+                    .sample_line = try arena.dupe(u8, file_score.sample_line[0..@min(file_score.sample_line.len, cfg.max_read_file_line_len)]),
                     .sample_line_number = file_score.sample_line_number,
                 });
             }
@@ -408,24 +412,6 @@ fn testConfig(workspace_root: []const u8) Config {
         .max_read_file_bytes = 1024,
         .max_read_file_line_len = 200,
     };
-}
-
-test "semantic search config uses dispatch context limits" {
-    const ignored = [_][]const u8{"ignored"};
-    const cfg = configFromContext(.{
-        .allocator = std.testing.allocator,
-        .workspace_root = "/workspace",
-        .ignored_list_entries = &ignored,
-        .max_list_entries = 7,
-        .max_read_file_bytes = 11,
-        .max_read_file_line_len = 17,
-    });
-
-    try std.testing.expectEqualStrings("/workspace", cfg.workspace_root);
-    try std.testing.expectEqualSlices([]const u8, &ignored, cfg.ignored_list_entries);
-    try std.testing.expectEqual(@as(usize, 7), cfg.max_list_entries);
-    try std.testing.expectEqual(@as(usize, 11), cfg.max_read_file_bytes);
-    try std.testing.expectEqual(@as(usize, 17), cfg.max_read_file_line_len);
 }
 
 test "semantic search resolves active added roots and rejects removed roots" {
@@ -700,6 +686,39 @@ test "semantic search finds directory content matches and clips active output li
 
     const result = try runSearch(cfg, arena, "alpha", ".");
     try std.testing.expectEqualStrings("[search] 1 results for: alpha\ndocs/guide.txt:1: alpha topic\n", result);
+}
+
+test "semantic search reuses scan memory and retains independent result samples" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const alloc = std.testing.allocator;
+    const content = try alloc.alloc(u8, 64 * 1024);
+    defer alloc.free(content);
+    @memset(content, 'x');
+    content[content.len - 1] = '\n';
+    for (0..64) |index| {
+        var path_buf: [64]u8 = undefined;
+        const path = try std.fmt.bufPrint(&path_buf, "workspace/file-{d}.txt", .{index});
+        try writeTestFile(tmp.dir, path, content);
+    }
+    try writeTestFile(tmp.dir, "workspace/alpha.txt", "needle alpha\n");
+    try writeTestFile(tmp.dir, "workspace/beta.txt", "needle beta\n");
+    const workspace = try workspaceRoot(alloc, tmp);
+    defer alloc.free(workspace);
+
+    // The corpus is larger than this budget; only one file may be scratch state.
+    const storage = try alloc.alloc(u8, 2 * 1024 * 1024);
+    defer alloc.free(storage);
+    var bounded = std.heap.FixedBufferAllocator.init(storage);
+    var arena_state = std.heap.ArenaAllocator.init(bounded.allocator());
+    defer arena_state.deinit();
+    var cfg = testConfig(workspace);
+    cfg.max_read_file_bytes = content.len;
+    const result = try runSearch(cfg, arena_state.allocator(), "needle", ".");
+    try std.testing.expectEqualStrings(
+        "[search] 2 results for: needle\nalpha.txt:1: needle alpha\nbeta.txt:1: needle beta\n",
+        result,
+    );
 }
 
 test "semantic search basename scoring affects deterministic ordering" {

@@ -206,6 +206,8 @@ afx bridge status --json                # structured status output
 afx bridge pair <connector>             # generate pairing code for authorization
 ```
 
+Running-daemon status snapshots refresh every five seconds.
+
 ### In-chat slash commands
 
 When chatting with the bridge bot, standard control commands are supported:
@@ -297,7 +299,7 @@ When `bridge.home_channel` is configured, your interactive TUI session mirrors p
 ```
 
 - Permission prompts in the interactive terminal are dispatched to chat as interactive buttons or reply prompts. Answering in chat approves or denies the terminal action immediately.
-- If you answer locally in the terminal, the chat prompt is updated to show it was answered in the terminal.
+- If you answer locally in the terminal, the chat prompt is updated to show it was answered in the terminal. Cancelled requests discard pending chat decisions; replies must match the still-active request.
 - Turn-complete notifications include a one-line summary with the workspace name and assistant response snippet.
 - Home channel mirroring can be toggled without editing JSON via `/settings` (`Home channel: on|off`).
 

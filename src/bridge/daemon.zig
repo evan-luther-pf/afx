@@ -782,17 +782,7 @@ pub fn handleBridgeCli(
                 const json = snap.render(alloc, .json) catch continue;
                 defer alloc.free(json);
 
-                const tmp_status = try std.fmt.allocPrint(alloc, "{s}.tmp", .{paths.status_file});
-                defer alloc.free(tmp_status);
-
-                if (std.Io.Dir.cwd().createFile(io_mod.getIo(), tmp_status, .{})) |f| {
-                    var file = f;
-                    var write_buf: [4096]u8 = undefined;
-                    var w = file.writer(io_mod.getIo(), &write_buf);
-                    w.interface.writeAll(json) catch {};
-                    var cwd = std.Io.Dir.cwd();
-                    cwd.rename(tmp_status, cwd, paths.status_file, io_mod.getIo()) catch {};
-                } else |_| {}
+                io_mod.writeFileAtomic(alloc, paths.status_file, json) catch {};
             }
         }
 

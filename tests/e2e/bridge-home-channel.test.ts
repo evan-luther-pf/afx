@@ -1,6 +1,6 @@
 import { describe, expect, test, afterEach } from "bun:test";
 import type { Subprocess } from "bun";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync, realpathSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync, realpathSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FX_BIN } from "../evals/eval-helpers";
@@ -283,5 +283,11 @@ describe("bridge home channel", () => {
     // Check turn complete notification sent for second turn
     const sendLine2 = await bridge.waitForStdoutLine((l) => l.startsWith("SEND test_chat afx: turn complete in") && l !== sendLine1);
     expect(sendLine2).toContain("Local answer acknowledged; second turn complete.");
+    expect(existsSync(join(env.workspace, "file1.txt"))).toBe(false);
+    expect(existsSync(join(env.workspace, "file2.txt"))).toBe(false);
+    await activeSession.sendText("/quit");
+    expect(await activeSession.waitForSessionEnd(5_000)).toBe(true);
+    expect(readFileSync(stderrPath, "utf8")).toBe("");
+    expect(bridge.stderrLines).toEqual([]);
   }, TIMEOUT);
 });

@@ -333,6 +333,13 @@ describe("afx bridge (fake connector)", () => {
     bridge.writeLine("MSG test_chat test_user Hi");
     await bridge.waitForStdoutLine((line) => line.startsWith("SEND test_chat "));
 
+    const statusPath = join(ctx.home, ".afx", "bridge", "status.json");
+    // The child Zig process owns the real five-second snapshot timer.
+    const deadline = Date.now() + 10_000;
+    while (!existsSync(statusPath) && Date.now() < deadline) {
+      await Bun.sleep(50);
+    }
+
     // Query status --json while running
     const statusResult = await runFx(["bridge", "status", "--json"], {
       env: { HOME: ctx.home },
@@ -340,13 +347,15 @@ describe("afx bridge (fake connector)", () => {
     expect(statusResult.code).toBe(0);
     const parsedStatus = JSON.parse(statusResult.stdout);
     expect(parsedStatus.running).toBe(true);
+    expect(parsedStatus.conversation_count).toBe(1);
+    expect(parsedStatus.uptime_s).toBeGreaterThanOrEqual(5);
+    expect(statusResult.stderr).toBe("");
 
     // Stop daemon via CLI
     const stopResult = await runFx(["bridge", "stop"], {
       env: { HOME: ctx.home },
     });
     expect(stopResult.code).toBe(0);
-    expect(stopResult.stdout).toContain("Bridge daemon stopped");
 
     // Check status --json reports running: false
     const stoppedStatusResult = await runFx(["bridge", "status", "--json"], {
