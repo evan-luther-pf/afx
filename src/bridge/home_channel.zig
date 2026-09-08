@@ -58,11 +58,20 @@ fn unlinkSocket(path: []const u8) void {
 fn writeAllFd(fd: std.c.fd_t, bytes: []const u8) !void {
     var written: usize = 0;
     while (written < bytes.len) {
-        const rc = std.c.write(fd, bytes[written..].ptr, bytes.len - written);
-        if (rc < 0) return error.WriteFailed;
+        const rc = std.c.send(fd, bytes[written..].ptr, bytes.len - written, posix.MSG.NOSIGNAL);
+        if (rc < 0) {
+            if (posix.errno(rc) == .INTR) continue;
+            return error.WriteFailed;
+        }
         if (rc == 0) return error.WriteZero;
         written += @intCast(rc);
     }
+}
+
+fn configureSocket(fd: std.c.fd_t) !void {
+    if (std.c.fcntl(fd, std.c.F.SETFD, @as(usize, std.c.FD_CLOEXEC)) != 0) return error.SocketSetupFailed;
+    const timeout = posix.timeval{ .sec = 0, .usec = 250_000 };
+    try posix.setsockopt(fd, posix.SOL.SOCKET, posix.SO.SNDTIMEO, std.mem.asBytes(&timeout));
 }
 
 pub const PendingAsk = struct {
@@ -81,9 +90,15 @@ pub const HomeChannelServer = struct {
 
     pending_asks: std.ArrayListUnmanaged(PendingAsk) = .empty,
     pending_mutex: std.Io.Mutex = .init,
-    client_threads: std.ArrayListUnmanaged(std.Thread) = .empty,
-    client_fds: std.ArrayListUnmanaged(std.c.fd_t) = .empty,
+    clients: std.ArrayListUnmanaged(*ClientConnection) = .empty,
     clients_mutex: std.Io.Mutex = .init,
+
+    const ClientConnection = struct {
+        server: *HomeChannelServer,
+        fd: ?std.c.fd_t,
+        thread: std.Thread,
+        finished: std.atomic.Value(bool) = .init(false),
+    };
 
     pub fn init(
         alloc: std.mem.Allocator,
@@ -92,13 +107,17 @@ pub const HomeChannelServer = struct {
         connectors: []Connector,
     ) !*HomeChannelServer {
         const self = try alloc.create(HomeChannelServer);
+        errdefer alloc.destroy(self);
+        const path = try alloc.dupe(u8, socket_path);
+        errdefer alloc.free(path);
+        const name = try alloc.dupe(u8, home_channel.connector);
+        errdefer alloc.free(name);
+        const chat_id = try alloc.dupe(u8, home_channel.chat_id);
+        errdefer alloc.free(chat_id);
         self.* = .{
             .alloc = alloc,
-            .socket_path = try alloc.dupe(u8, socket_path),
-            .home_channel = .{
-                .connector = try alloc.dupe(u8, home_channel.connector),
-                .chat_id = try alloc.dupe(u8, home_channel.chat_id),
-            },
+            .socket_path = path,
+            .home_channel = .{ .connector = name, .chat_id = chat_id },
             .connectors = try alloc.dupe(Connector, connectors),
         };
         return self;
@@ -114,10 +133,7 @@ pub const HomeChannelServer = struct {
         self.pending_asks.deinit(self.alloc);
         self.pending_mutex.unlock(io_mod.getIo());
 
-        self.clients_mutex.lockUncancelable(io_mod.getIo());
-        self.client_threads.deinit(self.alloc);
-        self.client_fds.deinit(self.alloc);
-        self.clients_mutex.unlock(io_mod.getIo());
+        self.clients.deinit(self.alloc);
 
         self.alloc.free(self.connectors);
         self.alloc.free(self.home_channel.connector);
@@ -142,7 +158,7 @@ pub const HomeChannelServer = struct {
         if (std.fs.path.dirname(self.socket_path)) |dir| {
             std.Io.Dir.createDirAbsolute(io_mod.getIo(), dir, .default_dir) catch |err| switch (err) {
                 error.PathAlreadyExists => {},
-                else => {},
+                else => return err,
             };
         }
 
@@ -152,6 +168,7 @@ pub const HomeChannelServer = struct {
         const fd = std.c.socket(posix.AF.UNIX, posix.SOCK.STREAM, 0);
         if (fd < 0) return error.SocketCreationFailed;
         errdefer _ = std.c.close(fd);
+        try configureSocket(fd);
 
         var addr = posix.sockaddr.un{
             .family = posix.AF.UNIX,
@@ -163,53 +180,50 @@ pub const HomeChannelServer = struct {
 
         const addr_len: posix.socklen_t = @intCast(@offsetOf(posix.sockaddr.un, "path") + self.socket_path.len + 1);
         if (std.c.bind(fd, @ptrCast(&addr), addr_len) != 0) return error.BindFailed;
+        errdefer unlinkSocket(self.socket_path);
+        try std.Io.Dir.cwd().setFilePermissions(io_mod.getIo(), self.socket_path, .fromMode(0o600), .{});
         if (std.c.listen(fd, 16) != 0) return error.ListenFailed;
-
-        // Restrict permissions to 0600
-        _ = std.c.fchmod(fd, 0o600);
 
         self.server_fd = fd;
         self.running.store(true, .seq_cst);
 
-        self.accept_thread = try std.Thread.spawn(.{}, acceptThreadEntry, .{self});
+        errdefer {
+            self.running.store(false, .seq_cst);
+            self.server_fd = null;
+        }
+        self.accept_thread = try std.Thread.spawn(.{}, acceptThreadEntry, .{ self, fd });
     }
 
     pub fn stop(self: *HomeChannelServer) void {
-        if (!self.running.load(.seq_cst)) return;
-        self.running.store(false, .seq_cst);
-
+        if (!self.running.swap(false, .seq_cst)) return;
         if (self.server_fd) |fd| {
             _ = posix.system.shutdown(fd, posix.system.SHUT.RDWR);
-            _ = std.c.close(fd);
-            self.server_fd = null;
         }
-
+        if (self.accept_thread) |thread| thread.join();
+        self.accept_thread = null;
+        if (self.server_fd) |fd| _ = std.c.close(fd);
+        self.server_fd = null;
         unlinkSocket(self.socket_path);
 
+        // Admission has stopped. Wake readers, then join without their cleanup lock.
         self.clients_mutex.lockUncancelable(io_mod.getIo());
-        for (self.client_fds.items) |cfd| {
-            _ = posix.system.shutdown(cfd, posix.system.SHUT.RDWR);
+        for (self.clients.items) |client| {
+            if (client.fd) |fd| _ = posix.system.shutdown(fd, posix.system.SHUT.RDWR);
         }
-        self.client_fds.clearRetainingCapacity();
         self.clients_mutex.unlock(io_mod.getIo());
-
-        if (self.accept_thread) |t| {
-            t.join();
-            self.accept_thread = null;
+        for (self.clients.items) |client| {
+            client.thread.join();
+            self.alloc.destroy(client);
         }
-
-        self.clients_mutex.lockUncancelable(io_mod.getIo());
-        for (self.client_threads.items) |t| {
-            t.join();
-        }
-        self.client_threads.clearRetainingCapacity();
-        self.clients_mutex.unlock(io_mod.getIo());
+        self.clients.clearRetainingCapacity();
     }
 
-    fn acceptThreadEntry(self: *HomeChannelServer) void {
-        const sfd = self.server_fd orelse return;
-
+    fn acceptThreadEntry(self: *HomeChannelServer, sfd: std.c.fd_t) void {
         while (self.running.load(.seq_cst)) {
+            var poll_fds = [_]posix.pollfd{.{ .fd = sfd, .events = posix.POLL.IN, .revents = 0 }};
+            const ready = posix.poll(&poll_fds, 250) catch continue;
+            if (!self.running.load(.seq_cst)) break;
+            if (ready == 0 or poll_fds[0].revents & posix.POLL.IN == 0) continue;
             const client_fd = std.c.accept(sfd, null, null);
             if (client_fd < 0) {
                 if (!self.running.load(.seq_cst)) break;
@@ -218,26 +232,65 @@ pub const HomeChannelServer = struct {
             }
 
             self.clients_mutex.lockUncancelable(io_mod.getIo());
-            self.client_fds.append(self.alloc, client_fd) catch {};
-            const th = std.Thread.spawn(.{}, clientThreadEntry, .{ self, client_fd }) catch {
+            defer self.clients_mutex.unlock(io_mod.getIo());
+            self.reapClients();
+            if (!self.running.load(.seq_cst)) {
                 _ = std.c.close(client_fd);
-                self.clients_mutex.unlock(io_mod.getIo());
+                break;
+            }
+            // Accepted sockets inherit the listener's timeout. On Darwin,
+            // setsockopt can return EINVAL after a short-lived peer closes.
+            if (std.c.fcntl(client_fd, std.c.F.SETFD, @as(usize, std.c.FD_CLOEXEC)) != 0) {
+                _ = std.c.close(client_fd);
+                continue;
+            }
+            self.clients.ensureUnusedCapacity(self.alloc, 1) catch {
+                _ = std.c.close(client_fd);
                 continue;
             };
-            self.client_threads.append(self.alloc, th) catch {};
-            self.clients_mutex.unlock(io_mod.getIo());
+            const client = self.alloc.create(ClientConnection) catch {
+                _ = std.c.close(client_fd);
+                continue;
+            };
+            client.* = .{ .server = self, .fd = client_fd, .thread = undefined };
+            client.thread = std.Thread.spawn(.{}, clientThreadEntry, .{client}) catch {
+                self.alloc.destroy(client);
+                _ = std.c.close(client_fd);
+                continue;
+            };
+            self.clients.appendAssumeCapacity(client);
         }
     }
 
-    fn clientThreadEntry(self: *HomeChannelServer, client_fd: std.c.fd_t) void {
+    // Called by the sole admission thread with clients_mutex held.
+    fn reapClients(self: *HomeChannelServer) void {
+        var index: usize = 0;
+        while (index < self.clients.items.len) {
+            const client = self.clients.items[index];
+            if (!client.finished.load(.acquire)) {
+                index += 1;
+                continue;
+            }
+            client.thread.join();
+            self.alloc.destroy(client);
+            _ = self.clients.swapRemove(index);
+        }
+    }
+
+    fn clientThreadEntry(client: *ClientConnection) void {
+        const self = client.server;
+        const client_fd = client.fd.?;
+        defer client.finished.store(true, .release);
         var read_buf: [4096]u8 = undefined;
         var acc: std.ArrayListUnmanaged(u8) = .empty;
         defer acc.deinit(self.alloc);
 
         while (self.running.load(.seq_cst)) {
             const rc = std.c.read(client_fd, &read_buf, read_buf.len);
+            if (rc < 0 and posix.errno(rc) == .INTR) continue;
             if (rc <= 0) break;
             const n: usize = @intCast(rc);
+            if (acc.items.len + n > 256 * 1024) break;
 
             acc.appendSlice(self.alloc, read_buf[0..n]) catch break;
 
@@ -266,7 +319,10 @@ pub const HomeChannelServer = struct {
         }
         self.pending_mutex.unlock(io_mod.getIo());
 
+        self.clients_mutex.lockUncancelable(io_mod.getIo());
         _ = std.c.close(client_fd);
+        client.fd = null;
+        self.clients_mutex.unlock(io_mod.getIo());
     }
 
     fn handleClientLine(self: *HomeChannelServer, client_fd: std.c.fd_t, line: []const u8) !void {
@@ -308,13 +364,16 @@ pub const HomeChannelServer = struct {
             const body = body_val.string;
 
             // Register pending ask
-            self.pending_mutex.lockUncancelable(io_mod.getIo());
-            const req_dup = try self.alloc.dupe(u8, request_id);
-            try self.pending_asks.append(self.alloc, .{
-                .request_id = req_dup,
-                .client_fd = client_fd,
-            });
-            self.pending_mutex.unlock(io_mod.getIo());
+            {
+                self.pending_mutex.lockUncancelable(io_mod.getIo());
+                defer self.pending_mutex.unlock(io_mod.getIo());
+                const req_dup = try self.alloc.dupe(u8, request_id);
+                errdefer self.alloc.free(req_dup);
+                try self.pending_asks.append(self.alloc, .{
+                    .request_id = req_dup,
+                    .client_fd = client_fd,
+                });
+            }
 
             // Reply {"ok":true} immediately
             writeAllFd(client_fd, "{\"ok\":true}\n") catch {};
@@ -345,7 +404,7 @@ pub const HomeChannelServer = struct {
             self.pending_mutex.lockUncancelable(io_mod.getIo());
             var found = false;
             for (self.pending_asks.items, 0..) |ask, idx| {
-                if (std.mem.eql(u8, ask.request_id, request_id)) {
+                if (ask.client_fd == client_fd and std.mem.eql(u8, ask.request_id, request_id)) {
                     self.alloc.free(ask.request_id);
                     _ = self.pending_asks.orderedRemove(idx);
                     found = true;
@@ -370,18 +429,15 @@ pub const HomeChannelServer = struct {
 
         for (self.pending_asks.items, 0..) |ask, idx| {
             if (std.mem.eql(u8, ask.request_id, request_id)) {
-                const dec_str = switch (decision) {
-                    .allow_once => "allow_once",
-                    .allow_session => "allow_session",
-                    .deny => "deny",
-                };
-                var buf: [256]u8 = undefined;
-                const msg = std.fmt.bufPrint(&buf, "{{\"op\":\"decision\",\"request_id\":\"{s}\",\"decision\":\"{s}\"}}\n", .{
-                    ask.request_id,
-                    dec_str,
-                }) catch return false;
-
-                writeAllFd(ask.client_fd, msg) catch {};
+                var out: std.Io.Writer.Allocating = .init(self.alloc);
+                defer out.deinit();
+                std.json.Stringify.value(.{
+                    .op = "decision",
+                    .request_id = ask.request_id,
+                    .decision = @tagName(decision),
+                }, .{}, &out.writer) catch return false;
+                out.writer.writeByte('\n') catch return false;
+                writeAllFd(ask.client_fd, out.written()) catch return false;
 
                 self.alloc.free(ask.request_id);
                 _ = self.pending_asks.orderedRemove(idx);
@@ -399,6 +455,7 @@ pub const HomeChannelClient = struct {
     active_ask_id: ?[]u8 = null,
     pending_decision: ?Decision = null,
     mutex: std.Io.Mutex = .init,
+    reader_thread: ?std.Thread = null,
 
     pub fn init(alloc: std.mem.Allocator, socket_path: []const u8) !HomeChannelClient {
         return .{
@@ -426,6 +483,7 @@ pub const HomeChannelClient = struct {
         const fd = std.c.socket(posix.AF.UNIX, posix.SOCK.STREAM, 0);
         if (fd < 0) return error.SocketCreationFailed;
         errdefer _ = std.c.close(fd);
+        try configureSocket(fd);
 
         var addr = posix.sockaddr.un{
             .family = posix.AF.UNIX,
@@ -444,17 +502,12 @@ pub const HomeChannelClient = struct {
         const fd = self.connectSocket() catch return;
         defer _ = std.c.close(fd);
 
-        var arena = std.heap.ArenaAllocator.init(self.alloc);
-        defer arena.deinit();
-        const a = arena.allocator();
-
-        var out: std.Io.Writer.Allocating = .init(a);
+        var out: std.Io.Writer.Allocating = .init(self.alloc);
+        defer out.deinit();
         try out.writer.writeAll("{\"op\":\"notify\",\"text\":");
         try std.json.Stringify.value(text, .{}, &out.writer);
         try out.writer.writeAll("}\n");
-
-        const payload = try out.toOwnedSlice();
-        try writeAllFd(fd, payload);
+        try writeAllFd(fd, out.written());
     }
 
     pub fn ask(
@@ -467,12 +520,11 @@ pub const HomeChannelClient = struct {
         self.cancelActiveAsk();
 
         const fd = self.connectSocket() catch return;
-
-        var arena = std.heap.ArenaAllocator.init(self.alloc);
-        defer arena.deinit();
-        const a = arena.allocator();
-
-        var out: std.Io.Writer.Allocating = .init(a);
+        errdefer _ = std.c.close(fd);
+        const id = try self.alloc.dupe(u8, request_id);
+        errdefer self.alloc.free(id);
+        var out: std.Io.Writer.Allocating = .init(self.alloc);
+        defer out.deinit();
         try out.writer.writeAll("{\"op\":\"ask\",\"request_id\":");
         try std.json.Stringify.value(request_id, .{}, &out.writer);
         try out.writer.writeAll(",\"title\":");
@@ -483,120 +535,81 @@ pub const HomeChannelClient = struct {
         try std.json.Stringify.value(session_id, .{}, &out.writer);
         try out.writer.writeAll("}\n");
 
-        const payload = try out.toOwnedSlice();
-        writeAllFd(fd, payload) catch {
-            _ = std.c.close(fd);
-            return;
-        };
+        try writeAllFd(fd, out.written());
 
-        // Read {"ok":true}
-        var ok_buf: [128]u8 = undefined;
-        const rc = std.c.read(fd, &ok_buf, ok_buf.len);
-        if (rc <= 0) {
-            _ = std.c.close(fd);
-            return;
-        }
-
-        self.mutex.lockUncancelable(io_mod.getIo());
         self.active_ask_fd = fd;
-        self.active_ask_id = try self.alloc.dupe(u8, request_id);
-        self.mutex.unlock(io_mod.getIo());
-
-        const ReaderContext = struct {
-            client: *HomeChannelClient,
-            fd: std.c.fd_t,
-        };
-        const ctx_ptr = try self.alloc.create(ReaderContext);
-        ctx_ptr.* = .{
-            .client = self,
-            .fd = fd,
-        };
-
-        const th = try std.Thread.spawn(.{}, readerThreadEntry, .{ctx_ptr});
-        th.detach();
+        self.active_ask_id = id;
+        errdefer {
+            self.active_ask_fd = null;
+            self.active_ask_id = null;
+        }
+        self.reader_thread = try std.Thread.spawn(.{}, readerThreadEntry, .{ self, fd });
     }
 
-    fn readerThreadEntry(ctx_ptr: *anyopaque) void {
-        const ReaderContext = struct {
-            client: *HomeChannelClient,
-            fd: std.c.fd_t,
-        };
-        const ctx: *ReaderContext = @ptrCast(@alignCast(ctx_ptr));
-        const alloc = ctx.client.alloc;
-        const fd = ctx.fd;
-        defer alloc.destroy(ctx);
-
-        var buf: [512]u8 = undefined;
-        var acc: std.ArrayListUnmanaged(u8) = .empty;
-        defer acc.deinit(alloc);
-
-        while (true) {
-            const rc = std.c.read(fd, &buf, buf.len);
-            if (rc <= 0) break;
-            const n: usize = @intCast(rc);
-            acc.appendSlice(alloc, buf[0..n]) catch break;
-
-            if (std.mem.indexOfScalar(u8, acc.items, '\n')) |nl_idx| {
-                const line = acc.items[0..nl_idx];
-                const trimmed = std.mem.trim(u8, line, " \r\t");
-                if (trimmed.len > 0) {
-                    if (std.json.parseFromSlice(std.json.Value, alloc, trimmed, .{})) |parsed| {
-                        defer parsed.deinit();
-                        if (parsed.value == .object) {
-                            const op_val = parsed.value.object.get("op");
-                            const dec_val = parsed.value.object.get("decision");
-                            if (op_val != null and op_val.? == .string and std.mem.eql(u8, op_val.?.string, "decision") and dec_val != null and dec_val.? == .string) {
-                                const dec_str = dec_val.?.string;
-                                const decision: Decision = if (std.mem.eql(u8, dec_str, "deny"))
-                                    .deny
-                                else if (std.mem.eql(u8, dec_str, "allow_session"))
-                                    .allow_session
-                                else
-                                    .allow_once;
-
-                                const client = ctx.client;
-                                client.mutex.lockUncancelable(io_mod.getIo());
-                                client.pending_decision = decision;
-                                if (client.active_ask_fd) |active_fd| {
-                                    if (active_fd == fd) {
-                                        client.active_ask_fd = null;
-                                        if (client.active_ask_id) |id| {
-                                            client.alloc.free(id);
-                                            client.active_ask_id = null;
-                                        }
-                                    }
-                                }
-                                client.mutex.unlock(io_mod.getIo());
-                                _ = std.c.close(fd);
-                                break;
-                            }
-                        }
-                    } else |_| {}
-                }
-                break;
-            }
+    fn readerThreadEntry(self: *HomeChannelClient, fd: std.c.fd_t) void {
+        defer {
+            self.mutex.lockUncancelable(io_mod.getIo());
+            _ = std.c.close(fd);
+            self.active_ask_fd = null;
+            self.mutex.unlock(io_mod.getIo());
         }
+        // Acknowledgement and decision may be split or coalesced arbitrarily.
+        var buf: [1024]u8 = undefined;
+        var used: usize = 0;
+        while (used < buf.len) {
+            const rc = std.c.read(fd, buf[used..].ptr, buf.len - used);
+            if (rc < 0 and posix.errno(rc) == .INTR) continue;
+            if (rc <= 0) return;
+            used += @intCast(rc);
+            var start: usize = 0;
+            while (std.mem.findScalarPos(u8, buf[0..used], start, '\n')) |end| {
+                if (self.acceptDecision(buf[start..end], fd)) return;
+                start = end + 1;
+            }
+            std.mem.copyForwards(u8, &buf, buf[start..used]);
+            used -= start;
+        }
+    }
+
+    fn acceptDecision(self: *HomeChannelClient, line: []const u8, fd: std.c.fd_t) bool {
+        var parsed = std.json.parseFromSlice(std.json.Value, self.alloc, line, .{}) catch return false;
+        defer parsed.deinit();
+        if (parsed.value != .object) return false;
+        const obj = parsed.value.object;
+        const op = obj.get("op") orelse return false;
+        const id = obj.get("request_id") orelse return false;
+        const value = obj.get("decision") orelse return false;
+        if (op != .string or id != .string or value != .string or !std.mem.eql(u8, op.string, "decision")) return false;
+        const decision = std.meta.stringToEnum(Decision, value.string) orelse return false;
+        self.mutex.lockUncancelable(io_mod.getIo());
+        defer self.mutex.unlock(io_mod.getIo());
+        if (self.active_ask_fd != fd) return false;
+        if (!std.mem.eql(u8, self.active_ask_id orelse return false, id.string)) return false;
+        self.pending_decision = decision;
+        return true;
     }
 
     pub fn cancelActiveAsk(self: *HomeChannelClient) void {
         self.mutex.lockUncancelable(io_mod.getIo());
-        const maybe_fd = self.active_ask_fd;
-        const maybe_id = self.active_ask_id;
-
-        self.active_ask_fd = null;
-        self.active_ask_id = null;
+        if (self.active_ask_fd) |fd| {
+            if (self.active_ask_id) |id| {
+                var out: std.Io.Writer.Allocating = .init(self.alloc);
+                defer out.deinit();
+                if (std.json.Stringify.value(.{ .op = "cancel_ask", .request_id = id }, .{}, &out.writer)) |_| {
+                    out.writer.writeByte('\n') catch {};
+                    writeAllFd(fd, out.written()) catch {};
+                } else |_| {}
+            }
+            self.active_ask_fd = null;
+            _ = posix.system.shutdown(fd, posix.system.SHUT.RDWR);
+        }
+        self.pending_decision = null;
         self.mutex.unlock(io_mod.getIo());
 
-        if (maybe_id) |id| {
-            defer self.alloc.free(id);
-            if (maybe_fd) |fd| {
-                var buf: [256]u8 = undefined;
-                if (std.fmt.bufPrint(&buf, "{{\"op\":\"cancel_ask\",\"request_id\":\"{s}\"}}\n", .{id})) |msg| {
-                    writeAllFd(fd, msg) catch {};
-                } else |_| {}
-                _ = std.c.close(fd);
-            }
-        }
+        if (self.reader_thread) |thread| thread.join();
+        self.reader_thread = null;
+        if (self.active_ask_id) |id| self.alloc.free(id);
+        self.active_ask_id = null;
     }
 };
 
@@ -729,4 +742,56 @@ test "home_channel: cancel_ask edits message" {
     try std.testing.expectEqual(@as(usize, 1), fake.edited_messages.items.len);
     try std.testing.expectEqualStrings("tui:200:2", fake.edited_messages.items[0].ref.platform_msg_id);
     try std.testing.expectEqualStrings("answered in terminal", fake.edited_messages.items[0].text);
+}
+
+test "home_channel: coalesced replies require the current request and a known decision" {
+    if (comptime builtin.os.tag == .windows) return;
+    const alloc = std.testing.allocator;
+    const socket_path = try std.fmt.allocPrint(alloc, "/tmp/afx-home-reply-{d}.sock", .{std.c.getpid()});
+    defer alloc.free(socket_path);
+    const address = try std.Io.net.UnixAddress.init(socket_path);
+    var server = try address.listen(std.testing.io, .{});
+    defer server.deinit(std.testing.io);
+    defer unlinkSocket(socket_path);
+    var client = try HomeChannelClient.init(alloc, socket_path);
+    defer client.deinit();
+    // The daemon has not accepted or acknowledged yet: ask must not block.
+    try client.ask("tui:1:2", "Write file", "file.txt", "session");
+    const peer = try server.accept(std.testing.io);
+    defer peer.close(std.testing.io);
+    try writeAllFd(peer.socket.handle,
+        \\{"ok":true}
+        \\{"op":"decision","request_id":"tui:1:1","decision":"allow_once"}
+        \\{"op":"decision","request_id":"tui:1:2","decision":"unknown"}
+        \\{"op":"decision","request_id":"tui:1:2","decision":"deny"}
+        \\
+    );
+    _ = posix.system.shutdown(peer.socket.handle, posix.system.SHUT.WR);
+    client.reader_thread.?.join();
+    client.reader_thread = null;
+    try std.testing.expectEqual(Decision.deny, client.takePendingDecision().?);
+    try std.testing.expectEqual(null, client.takePendingDecision());
+}
+
+test "home_channel: cancellation discards unread decisions and joins waiting readers" {
+    if (comptime builtin.os.tag == .windows) return;
+    for ([_]bool{ false, true }) |send_decision| {
+        var fds: [2]std.c.fd_t = undefined;
+        try std.testing.expectEqual(@as(c_int, 0), std.c.socketpair(posix.AF.UNIX, posix.SOCK.STREAM, 0, &fds));
+        defer _ = std.c.close(fds[1]);
+        var client = try HomeChannelClient.init(std.testing.allocator, "");
+        defer client.deinit();
+        client.active_ask_id = try std.testing.allocator.dupe(u8, "tui:1:2");
+        client.active_ask_fd = fds[0];
+        if (send_decision) {
+            try writeAllFd(fds[1], "{\"op\":\"decision\",\"request_id\":\"tui:1:2\",\"decision\":\"allow_once\"}\n");
+        }
+        client.reader_thread = try std.Thread.spawn(.{}, HomeChannelClient.readerThreadEntry, .{ &client, fds[0] });
+        if (send_decision) {
+            client.reader_thread.?.join();
+            client.reader_thread = null;
+        }
+        client.cancelActiveAsk();
+        try std.testing.expectEqual(null, client.takePendingDecision());
+    }
 }

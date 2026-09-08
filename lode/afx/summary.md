@@ -61,6 +61,14 @@ Skills, agent profiles, and MCP are current extension points, but they are not t
 
 afx uses private state under `~/.afx/`. Project defaults come from `.afx.json`, project skills from `.afx/skills`, and project agent profiles from `.afx/agents`. Control records persist role policy and depth so resumed children retain the same authority.
 
+## Resource Ownership
+
+Tool argument objects are parsed directly into the caller's arena with `parseFromSliceLeaky`; returned maps and strings share that lifetime. Directory semantic search keeps per-file paths and contents in a resettable scan arena, copying only retained result paths and clipped samples into the request arena. Search memory must not grow with nonmatching file contents.
+
+The bridge persists status with the shared atomic-write helper, which writes, syncs, closes, and renames the temporary file. Home-channel clients own and join approval readers before replacement or destruction. A single bounded line decoder handles acknowledgements and decisions; only recognized decisions with the active request ID may reach the permission UI, and cancellation clears unconsumed replies.
+
+The home-channel server tracks live connections rather than historical file descriptors. It stops admission before shutting down and joining readers, and reaps finished workers during admission. Listener polling bounds shutdown on Darwin, where shutting down a listening socket does not reliably wake `accept`. Accepted sockets inherit the listener's send timeout; resetting that option after a short-lived Darwin peer has closed can return `EINVAL`.
+
 ## Invariants
 
 - A child cannot gain tools or permission mode beyond captured host authority.
